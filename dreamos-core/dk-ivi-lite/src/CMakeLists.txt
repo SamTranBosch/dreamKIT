@@ -32,7 +32,12 @@ qt_add_qml_module(dk_ivi
         controls/ModeControl.qml
         controls/ToggleButton.qml
         digitalauto/digitalauto.qml
+        marketplace/AppCard.qml
+        marketplace/AppGrid.qml
+        marketplace/CategoryBar.qml
+        marketplace/ConfirmDialog.qml
         marketplace/marketplace.qml
+        marketplace/SearchBar.qml
         installedservices/installedservices.qml
         installedvapps/installedvapps.qml
         resource/customwidgets/CustomBtn1.qml

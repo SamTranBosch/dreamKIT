@@ -1,295 +1,336 @@
 #include "marketplace.hpp"
-#include "fetching.hpp"
+#include <QFile>
 #include <QJsonDocument>
-#include <QJsonObject>
 #include <QJsonArray>
-#include <QDebug>
+#include <QJsonObject>
+#include <QStandardPaths>
+#include <QDir>
 
 extern QString DK_VCU_USERNAME;
 extern QString DK_ARCH;
 extern QString DK_DOCKER_HUB_NAMESPACE;
 extern QString DK_CONTAINER_ROOT;
 
-// Function to check if the file exists and create it with default content if not
-void ensureMarketplaceSelectionExists(const QString &marketplaceFilePath) {
-    QFile file(marketplaceFilePath);
+//-----------------------------------------------------------------------------
+// 1) AppListModel
+//-----------------------------------------------------------------------------
+AppListModel::AppListModel(QObject* p)
+  : QAbstractListModel(p)
+{}
 
-    // Check if the file already exists
-    if (!file.exists()) {
-        qDebug() << "File not found, creating" << marketplaceFilePath;
+int AppListModel::rowCount(const QModelIndex&) const { return m_apps.size(); }
 
-        // Define default JSON content
-        QJsonArray defaultArray;
-        QJsonObject defaultMarketplace;
-        defaultMarketplace["name"] = "BGSV Marketplace";
-        defaultMarketplace["marketplace_url"] = "https://store-be.digitalauto.tech";
-        defaultMarketplace["login_url"] = "";
-        defaultMarketplace["username"] = "";
-        defaultMarketplace["pwd"] = "";
-
-        defaultArray.append(defaultMarketplace);
-        QJsonDocument defaultDoc(defaultArray);
-        QByteArray jsonData = defaultDoc.toJson();
-
-        // Attempt to open the file for writing
-        if (file.open(QIODevice::WriteOnly)) {
-            file.write(jsonData);
-            file.close();
-            qDebug() << "Default marketplace selection file created at" << marketplaceFilePath;
-        } else {
-            qDebug() << "Error: Could not create the file" << marketplaceFilePath;
-        }
-    } else {
-        qDebug() << "Marketplace selection file already exists at" << marketplaceFilePath;
+QVariant AppListModel::data(const QModelIndex &idx, int role) const {
+    if (!idx.isValid() || idx.row() < 0 || idx.row() >= m_apps.size()) return {};
+    const auto &a = m_apps.at(idx.row());
+    switch(role) {
+      case IdRole:         return a.id;
+      case NameRole:       return a.name;
+      case AuthorRole:     return a.author;
+      case RatingRole:     return a.rating;
+      case DownloadsRole:  return a.downloads;
+      case IconRole:       return a.iconUrl;
+      case InstalledRole:  return a.isInstalled;
+      case FolderRole:     return a.folderName;
+      case PackageLinkRole:return a.packageLink;
+      default:             return {};
     }
 }
 
-MarketplaceAsync::MarketplaceAsync()
-{
-    QString dkRootFolder = qgetenv("DK_CONTAINER_ROOT");
-    QString marketplaceFolder = dkRootFolder + "dk_marketplace/";
-    QString marketPlaceSelection = marketplaceFolder + "marketplaceselection.json";
-    // Ensure marketplace selection file exists
-    ensureMarketplaceSelectionExists(marketPlaceSelection);
-
-    m_marketplaceList.clear();
-    m_marketplaceList = parseMarketplaceFile(marketPlaceSelection);
-
-    m_timer_installservice_runningcheck = new QTimer(this);
-    connect(m_timer_installservice_runningcheck, SIGNAL(timeout()), this, SLOT(checkInstallServiceIsRunning()));
-    m_timer_installservice_runningcheck->start(5000);
+QHash<int,QByteArray> AppListModel::roleNames() const {
+    return {
+      {IdRole,         "id"},
+      {NameRole,       "name"},
+      {AuthorRole,     "author"},
+      {RatingRole,     "rating"},
+      {DownloadsRole,  "downloads"},
+      {IconRole,       "iconUrl"},
+      {InstalledRole,  "isInstalled"},
+      {FolderRole,     "folderName"},
+      {PackageLinkRole,"packageLink"}
+    };
 }
 
-void MarketplaceAsync::checkInstallServiceIsRunning()
+QVariantMap AppListModel::get(int row) const {
+    QVariantMap m;
+    if (row<0||row>=m_apps.size()) return m;
+    const auto &a = m_apps.at(row);
+    m["id"]           = a.id;
+    m["name"]         = a.name;
+    m["author"]       = a.author;
+    m["rating"]       = a.rating;
+    m["downloads"]    = a.downloads;
+    m["iconUrl"]      = a.iconUrl;
+    m["isInstalled"]  = a.isInstalled;
+    m["folderName"]   = a.folderName;
+    m["packageLink"]  = a.packageLink;
+    return m;
+}
+
+void AppListModel::updateApps(const QList<AppInfo> &apps) {
+    beginResetModel();
+      m_apps = apps;
+    endResetModel();
+}
+
+void AppListModel::setAppInstalled(int idx, bool inst) {
+    if (idx<0||idx>=m_apps.size()) return;
+    m_apps[idx].isInstalled = inst;
+    QModelIndex mi = index(idx,0);
+    emit dataChanged(mi, mi, {InstalledRole});
+}
+
+
+//-----------------------------------------------------------------------------
+// 2) CategoryListModel
+//-----------------------------------------------------------------------------
+CategoryListModel::CategoryListModel(QObject* p)
+  : QAbstractListModel(p)
+{}
+
+int CategoryListModel::rowCount(const QModelIndex&) const { return m_list.size(); }
+
+QVariant CategoryListModel::data(const QModelIndex &idx, int role) const {
+    if (!idx.isValid()||idx.row()<0||idx.row()>=m_list.size()) return {};
+    const auto &c = m_list.at(idx.row());
+    switch(role){
+      case NameRole:     return c.name;
+      case UrlRole:      return c.url;
+      case LoginUrlRole: return c.loginUrl;
+      default:           return {};
+    }
+}
+
+QHash<int,QByteArray> CategoryListModel::roleNames() const {
+    return {
+      {NameRole,     "displayName"},
+      {UrlRole,      "marketUrl"},
+      {LoginUrlRole, "loginUrl"}
+    };
+}
+
+void CategoryListModel::loadFromJsonFile(const QString &filePath) {
+    QFile f(filePath);
+    if (!f.exists()) {
+        // create parent path + default entry
+        QDir().mkpath(QFileInfo(filePath).path());
+        QJsonArray arr;
+        QJsonObject def;
+        def["name"]            = "Default Store";
+        def["marketplace_url"] = "https://store-be.sdv.digital.auto";
+        def["login_url"]       = "";
+        arr.append(def);
+        if (f.open(QIODevice::WriteOnly)) {
+            f.write(QJsonDocument(arr).toJson());
+            f.close();
+        }
+    }
+    if (!f.open(QIODevice::ReadOnly)) return;
+    auto doc = QJsonDocument::fromJson(f.readAll());
+    f.close();
+    if (!doc.isArray()) return;
+
+    beginResetModel();
+      m_list.clear();
+      for (auto v : doc.array()) {
+        if (!v.isObject()) continue;
+        auto o = v.toObject();
+        Info info;
+        info.name     = o["name"].toString();
+        info.url      = o["marketplace_url"].toString();
+        info.loginUrl = o["login_url"].toString();
+        m_list.append(info);
+      }
+    endResetModel();
+}
+
+
+//-----------------------------------------------------------------------------
+// 3) MarketplaceViewModel
+//-----------------------------------------------------------------------------
+MarketplaceViewModel::MarketplaceViewModel(QObject *parent)
+  : QObject(parent)
+  , m_apps(new AppListModel(this))
+  , m_cats(new CategoryListModel(this))
+  , m_installer(new QProcess(this))
 {
-    QString appStsLog =  "/tmp/checkInstallServiceIsRunning.log";
-    QString cmd = "> " + appStsLog + "; docker ps > " + appStsLog;
-    system(cmd.toUtf8());
+    // … load categories, do initial search, etc …
+    // 1) load the file you shipped or created at runtime
+    QString cfg = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                  + "/marketplaceselection.json";
+    m_cats->loadFromJsonFile(cfg);
+
+    // Merge stderr/stdout so we can see errors in one channel:
+    m_installer->setProcessChannelMode(QProcess::MergedChannels);
+
+    // Log when the process actually starts:
+    connect(m_installer, &QProcess::started, this, [this](){
+        qDebug() << "[Installer] process started";
+    });
+
+    // If the process itself fails to launch:
+    connect(m_installer,
+            static_cast<void(QProcess::*)(QProcess::ProcessError)>(&QProcess::errorOccurred),
+            this,
+            [this](QProcess::ProcessError err){
+                qWarning() << "[Installer] errorOccurred:" << err
+                           << m_installer->errorString();
+                if (m_isInstalling) {
+                    m_isInstalling = false;
+                    emit isInstallingChanged(false);
+                }
+            });
+
+    // When the process finishes (either success or failure):
+    connect(m_installer,
+            QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
+            this,
+            [this](int exitCode, QProcess::ExitStatus exitStatus){
+                qDebug() << "[Installer] finished, code=" << exitCode
+                         << "status=" << exitStatus;
+                // Clear the busy overlay:
+                if (m_isInstalling) {
+                    m_isInstalling = false;
+                    emit isInstallingChanged(false);
+                }
+                // If it ran to completion, mark installed:
+                if (exitStatus == QProcess::NormalExit && exitCode == 0
+                    && m_pendingIndex >= 0)
+                {
+                    m_apps->setAppInstalled(m_pendingIndex, true);
+                    m_pendingIndex = -1;
+                }
+            });
+}
+
+void MarketplaceViewModel::setCurrentCategory(int idx) {
+    if (idx<0 || idx>=m_cats->rowCount()) return;
+    if (m_currentCategory==idx) return;
+    m_currentCategory = idx;
+    emit currentCategoryChanged(idx);
+    // re-search in new category
+    search(m_lastSearchTerm);
+}
+
+void MarketplaceViewModel::search(const QString &term) {
+    // pick a default term
+    m_lastSearchTerm = term.isEmpty() ? QStringLiteral("vehicle") : term;
+    // clear old rows
+    m_apps->updateApps({});
     
-    QFile logFile(appStsLog);
-    if (!logFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qCritical() << "Failed to open log file: checkInstallServiceIsRunning.log";
+    qDebug() << "MarketplaceViewModel::search:" << term;
+
+    // pick URLs from your cat-model
+    QModelIndex mi = m_cats->index(m_currentCategory,0);
+    QString marketUrl = m_cats->data(mi, CategoryListModel::UrlRole).toString();
+    QString loginUrl  = m_cats->data(mi, CategoryListModel::LoginUrlRole).toString();
+
+    // optional login
+    QString token;
+    if (!loginUrl.isEmpty()) {
+        // you’d gather user/pass from QSettings or a login dialog
+        QString user = "";
+        QString pass = "";
+        token = marketplace_login(loginUrl, user, pass);
+    }
+
+    // synchronous fetch + JSON->disk
+    bool ok = queryMarketplacePackages(marketUrl, token, /*page*/1,/*limit*/20, m_lastSearchTerm);
+    if (!ok) {
+        // show popup or just return
         return;
     }
 
-    QTextStream in(&logFile);
-    QString content = in.readAll();
+    // read the file that fetching.cpp wrote
+    QString dataPath = DK_CONTAINER_ROOT
+                     + QStringLiteral("dk_marketplace/marketplace_data_installcfg.json");
+    QFile f(dataPath);
+    if (!f.open(QIODevice::ReadOnly)) return;
+    auto doc = QJsonDocument::fromJson(f.readAll());
+    f.close();
 
-    if (content.isEmpty()) {
-        qCritical() << "Log file is empty or could not be read.";
+    QList<AppInfo> out;
+    if (doc.isArray()) {
+        for (auto v : doc.array()) {
+            if (!v.isObject()) continue;
+            auto o = v.toObject();
+            AppInfo a;
+            a.id          = o["_id"].toString();
+            a.name        = o["name"].toString();
+            a.author      = o["storeId"].toObject()["name"].toString();
+            a.rating      = o["rating"].toDouble();
+            a.downloads   = o["downloads"].toInt();
+            a.iconUrl     = o["thumbnail"].toString();
+            a.folderName  = a.id;
+            a.packageLink = o["dashboardConfig"].toString();
+            a.isInstalled = false; 
+            out.append(a);
+        }
+    }
+    m_apps->updateApps(out);
+}
+
+void MarketplaceViewModel::prepareInstall(int idx) {
+    QVariantMap info = m_apps->get(idx);
+    if (!info.value("isInstalled").toBool()) {
+        m_pendingIndex   = idx;
+        m_pendingName    = info.value("name").toString();
+        m_installPending = true;
+        m_installingIndex = idx;
+        emit pendingAppNameChanged(m_pendingName);
+        emit installPendingChanged(true);
+        emit installingIndexChanged(m_installingIndex);
+    }
+}
+
+void MarketplaceViewModel::confirmInstall()
+{
+    if (!m_installPending || m_pendingIndex < 0)
         return;
-    }
 
-    if (content.contains("dk_appinstallservice", Qt::CaseSensitivity::CaseSensitive)) {
-        setInstallServiceRunningStatus(true);
-    }
-    else {
-        setInstallServiceRunningStatus(false);
-    }
-}
+    m_installPending = false;
+    emit installPendingChanged(false);
 
-Q_INVOKABLE void MarketplaceAsync::initMarketplaceListFromDB()
-{
-    clearMarketplaceNameList();
-    for (const auto &marketplace : m_marketplaceList) {
-        qDebug() << "appendMarketplaceUrlList: " << marketplace.name;
-        appendMarketplaceUrlList(marketplace.name);
-    }
-}
-
-Q_INVOKABLE void MarketplaceAsync::setCurrentMarketPlaceIdx(int idx)
-{
-    qDebug() << __func__ << __LINE__ << " : current idx = " << idx;
-    m_current_idx = idx;
-    clearAppInfoToAppList();
-    searchAppFromStore(m_current_searchname);
-}
-
-// Function to parse marketplaceselection.json and populate a list of MarketplaceInfo
-QList<MarketplaceInfo> MarketplaceAsync::parseMarketplaceFile(const QString &filePath) 
-{
-    QList<MarketplaceInfo> marketplaceList;
-
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly)) {
-        qDebug() << "Could not open file:" << filePath;
-        return marketplaceList;
-    }
-
-    QByteArray jsonData = file.readAll();
-    file.close();
-
-    QJsonDocument document = QJsonDocument::fromJson(jsonData);
-    if (!document.isArray()) {
-        qDebug() << "Invalid JSON format in" << filePath;
-        return marketplaceList;
-    }
-
-    QJsonArray array = document.array();
-    for (const QJsonValue &value : array) {
-        if (value.isObject()) {
-            QJsonObject obj = value.toObject();
-            MarketplaceInfo info;
-            info.name = obj["name"].toString();
-            info.marketplace_url = obj["marketplace_url"].toString();
-            info.login_url = obj["login_url"].toString();
-            info.username = obj["username"].toString();
-            info.pwd = obj["pwd"].toString();
-            marketplaceList.append(info);
-        }
-    }
-
-    return marketplaceList;
-}
-
-void MarketplaceAsync::appstore_readAppList(const QString searchName, QList<AppListStruct> &AppListInfo) 
-{
-    QString marketplaceFolder = DK_CONTAINER_ROOT + "dk_marketplace/";
-    QString mpDataPath = marketplaceFolder + "marketplace_data_installcfg.json";
-
-    // queryMarketplacePackages(1, 10, searchName);
-    QString marketplace_url = m_marketplaceList[m_current_idx].marketplace_url;
-    QString uname = m_marketplaceList[m_current_idx].username;
-    QString pwd = m_marketplaceList[m_current_idx].pwd;
-    QString login_url = m_marketplaceList[m_current_idx].login_url;
-
-    qDebug() << "Requesting data marketplace_url : " << marketplace_url;
-    qDebug() << "Requesting data uname : " << uname;
-    qDebug() << "Requesting data pwd : " << pwd;
-    qDebug() << "Requesting data login_url : " << login_url;
-    qDebug() << "Requesting data searchName : " << searchName;
-
-    QString token = "";
-    if (!uname.isEmpty() && !pwd.isEmpty()) {
-        // Perform login and query with token if uname and pwd are provided
-        token = marketplace_login(login_url, uname, pwd);
-        if (!token.isEmpty()) {
-            queryMarketplacePackages(marketplace_url, token, 1, 10, searchName);
-            // qDebug() << "Authenticated request returned data of length:";
-        } else {
-            qDebug() << "Failed to authenticate with provided credentials.";
-        }
-    } else {
-        // Query without token if uname and pwd are empty
-        queryMarketplacePackages(marketplace_url, token, 1, 10, searchName);
-        qDebug() << "Unauthenticated request returned data of length:";
-    }
-
-    // Read the JSON file
-    QFile file(mpDataPath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qDebug() << "Failed to open file.";
-        return;
-    }
-
-    QByteArray jsonData = file.readAll();
-    file.close();
-
-    // Parse the JSON data
-    QJsonDocument document = QJsonDocument::fromJson(jsonData);
-    if (document.isNull() || !document.isArray()) {
-        qDebug() << __func__ << "@" << __LINE__ << ": Invalid JSON format.";
-        return;
-    }
-
-    QJsonArray jsonArray = document.array();
-
-    // Loop through each item in the array
-    for (const QJsonValue &value : jsonArray) {
-        if (!value.isObject()) {
-            continue;
-        }
-
-        QJsonObject jsonObject = value.toObject();
-        AppListStruct appInfo;
-
-        // Extract relevant fields for AppListStruct
-        appInfo.id = jsonObject["_id"].toString();
-        appInfo.category = jsonObject["category"].toString();        
-
-        // Extract relevant fields for AppListStruct
-        appInfo.name = jsonObject["name"].toString();
-
-        QJsonObject storeId = jsonObject["storeId"].toObject();
-        if (storeId.contains("name")) {
-            appInfo.author = storeId["name"].toString();
-        } 
-        else {
-            appInfo.author = "Unknown";
-        }
-
-        // Extract rating (if it exists)
-        appInfo.rating = jsonObject["rating"].isNull() ? "**" : QString::number(jsonObject["rating"].toDouble());
-
-        // Extract number of downloads
-        appInfo.noofdownload = QString::number(jsonObject["downloads"].toInt());
-
-        // Extract thumbnail for iconPath
-        appInfo.iconPath = jsonObject["thumbnail"].toString();
-
-        // Use the name as the folder name
-        appInfo.foldername = appInfo.id;
-
-        // Extract dashboardConfig or default to empty
-        appInfo.packagelink = jsonObject["dashboardConfig"].toString().isEmpty() ? "N/A" : jsonObject["dashboardConfig"].toString();
-
-        // For this example, assume all apps are not installed
-        appInfo.isInstalled = false;
-
-        // Only add to the list if the name contains the searchName
-        if (appInfo.category.contains(searchName, Qt::CaseInsensitive)) {
-            AppListInfo.append(appInfo);
-        }
-    }
-
-    qDebug() << "App list loaded, total apps found:" << AppListInfo.size();
-}
-
-Q_INVOKABLE void MarketplaceAsync::searchAppFromStore(const QString searchName)
-{
-    m_current_searchname = searchName;
-    if (m_current_searchname == "") {
-        m_current_searchname = "vehicle";
-    }
-//    qDebug() << __func__ << "m_current_searchname = " << m_current_searchname;
-    m_searchedAppList.clear();
-    appstore_readAppList(m_current_searchname, m_searchedAppList);
-
-    if (m_searchedAppList.size()) {
-        for(int i = 0; i < m_searchedAppList.size(); i++) {
-            //        qDebug() << AppListInfo[i].name;
-            appendAppInfoToAppList(m_searchedAppList[i].name, m_searchedAppList[i].author,
-                                   m_searchedAppList[i].rating, m_searchedAppList[i].noofdownload,
-                                   m_searchedAppList[i].iconPath,
-                                   m_searchedAppList[i].isInstalled);
-        }
-    }
-    else {
-        appendAppInfoToAppList("", "", "", "", "", true);
-    }
-    appendLastRowToAppList(m_searchedAppList.size());
-}
-
-Q_INVOKABLE void MarketplaceAsync::installApp(const int index)
-{
-    if (index >= m_searchedAppList.size()) {
-        qDebug() << "index out of range";
-        return;
-    }
-
-    QString appId = m_searchedAppList[index].id;
-    qDebug() << m_searchedAppList[index].name << " index = " << index << " is installing";
-    qDebug() << " appId = " << appId;
-
-    QString dockerHubUrl = "";
-    if(DK_DOCKER_HUB_NAMESPACE.isEmpty()) {
-        DK_DOCKER_HUB_NAMESPACE = qgetenv("DK_DOCKER_HUB_NAMESPACE");
-    }
-    dockerHubUrl = DK_DOCKER_HUB_NAMESPACE + "/";
-     
-
-    QString installCfg = "/home/" + DK_VCU_USERNAME + "/.dk/dk_marketplace/" + appId + "_installcfg.json";
-    QString cmd = "docker kill dk_appinstallservice;docker rm dk_appinstallservice;docker run -d -it --name dk_appinstallservice -v /home/" + DK_VCU_USERNAME + "/.dk:/app/.dk -v /var/run/docker.sock:/var/run/docker.sock --log-opt max-size=10m --log-opt max-file=3 -v " + installCfg + ":/app/installCfg.json " + dockerHubUrl + "dk_appinstallservice:latest";
+    // Build the command string
+    QString appId = m_apps->get(m_pendingIndex).value("id").toString();
+    QString user  = qgetenv("DK_USER");
+    QString cmd   = QStringLiteral(
+        "docker run --rm --name dk_appinstall "
+        "-v /home/%1/.dk:/app/.dk "
+        "-v /var/run/docker.sock:/var/run/docker.sock "
+        "-v /home/%1/.dk/dk_marketplace/%2_installcfg.json:/app/installCfg.json "
+        "dk_appinstallservice:latest"
+    ).arg(user, appId);
+    
     qDebug() << " install cmd = " << cmd;
-    system(cmd.toUtf8()); // this is the exemple, download from local.
+
+    // If an old process is still lingering, kill it:
+    if (m_installer->state() != QProcess::NotRunning) {
+        m_installer->kill();
+        m_installer->waitForFinished(10000);
+    }
+
+    // Switch on the busy overlay:
+    m_isInstalling = true;
+    emit isInstallingChanged(true);
+    emit installingIndexChanged(m_pendingIndex);
+
+    // Launch via the shell so we can pass a single command string
+    m_installer->start("sh", QStringList() << "-c" << cmd);
+
+    // You can check immediately if it actually started:
+    if (!m_installer->waitForStarted(3000)) {
+        qWarning() << "[Installer] failed to start!";
+        m_isInstalling = false;
+        emit isInstallingChanged(false);
+        emit installingIndexChanged(-1);
+    }
+}
+
+void MarketplaceViewModel::cancelInstall() {
+    if (!m_installPending) return;
+    m_installPending = false;
+    emit installPendingChanged(false);
+    m_installingIndex = -1;
+    emit installingIndexChanged(-1);
 }

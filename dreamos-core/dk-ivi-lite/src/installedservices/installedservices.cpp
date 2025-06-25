@@ -59,7 +59,7 @@ bool CheckAppRunningThread::isVipReachable() {
 
 void CheckAppRunningThread::checkRunningAppSts()
 {    
-    QString appStsLog =  "/tmp/vservice_checkRunningServicesSts.log";
+    QString appStsLog = DK_INSTALLED_SERVICE_FOLDER + "checkRunningServicesSts.log";
     QString cmd = "> " + appStsLog + "; docker ps > " + appStsLog;
     if (m_serviceAsync->m_is_vip_connected && m_serviceAsync->m_is_vip_service_installed) {
         cmd = "(> " + appStsLog + "; docker ps ; ";  

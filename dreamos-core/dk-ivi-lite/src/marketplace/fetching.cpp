@@ -222,7 +222,7 @@ bool queryMarketplacePackages(const QString &marketplace_url, const QString &tok
         QJsonObject jsonObject = jsonResponse.object();
 
         jsonArray = jsonObject["data"].toArray();
-        qDebug() << "len of data:" << jsonArray.size();
+        qDebug() << category << " - len of data:" << jsonArray.size();
     } else {
         return false;
         qDebug() << "Error:" << reply->errorString();

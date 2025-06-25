@@ -19,7 +19,10 @@ int main(int argc, char *argv[])
     VAPI_CLIENT.connectToServer(DK_VAPI_DATABROKER);
     // Pages
     qmlRegisterType<DigitalAutoAppAsync>("DigitalAutoAppAsync", 1, 0, "DigitalAutoAppAsync");
-    qmlRegisterType<MarketplaceAsync>("MarketplaceAsync", 1, 0, "MarketplaceAsync");
+    qmlRegisterType<CategoryListModel>("MyApp",1,0,"CategoryListModel");
+    qmlRegisterType<AppListModel>("MyApp",1,0,"AppListModel");
+    qmlRegisterType<MarketplaceViewModel>("MyApp",1,0,"MarketplaceViewModel");
+
     qmlRegisterType<ServicesAsync>("ServicesAsync", 1, 0, "ServicesAsync");
     qmlRegisterType<VappsAsync>("VappsAsync", 1, 0, "VappsAsync");
     qmlRegisterType<ControlsAsync>("ControlsAsync", 1, 0, "ControlsAsync");
