@@ -173,7 +173,7 @@ ApplicationWindow {
         anchors.rightMargin: 20
         color: "#2A2A2A"
         radius: 12
-        border.color: "#00D4AA"
+        border.color: "#00ffcc"
         border.width: 2
         opacity: 1.0
 
@@ -193,7 +193,7 @@ ApplicationWindow {
             anchors.centerIn: parent
             text: "Copyright © Eclipse Foundation, MIT License"
             font.family: "Segoe UI"
-            font.pixelSize: 16
+            font.pixelSize: 12
             font.weight: Font.Bold
             color: "#FFFFFF"
             horizontalAlignment: Text.AlignHCenter
