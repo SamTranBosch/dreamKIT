@@ -7,6 +7,12 @@
 
 #include <sstream>
 
+// nlohmann/json (header-only)
+#include <nlohmann/json.hpp>
+
+// Convenience alias for JSON.
+using json = nlohmann::json;
+
 namespace KuksaClient {
 
 std::string DataPointToString(const kuksa::val::v1::Datapoint &dp) {
@@ -46,11 +52,26 @@ std::string DataPointToString(const kuksa::val::v1::Datapoint &dp) {
 //=============================================================================
 // Overloaded setValueImpl Definitions
 //=============================================================================
-void setValueImpl(kuksa::val::v1::Datapoint *dp, const std::string &value) {
-  dp->set_string(value);
-}
 void setValueImpl(kuksa::val::v1::Datapoint *dp, bool value) {
   dp->set_bool_(value);
+}
+void setValueImpl(kuksa::val::v1::Datapoint *dp, uint8_t value) {
+  dp->set_uint32(value);
+}
+void setValueImpl(kuksa::val::v1::Datapoint *dp, uint16_t value) {
+  dp->set_uint32(value);
+}
+void setValueImpl(kuksa::val::v1::Datapoint *dp, uint32_t value) {
+  dp->set_uint32(value);
+}
+void setValueImpl(kuksa::val::v1::Datapoint *dp, uint64_t value) {
+  dp->set_uint64(value);
+}
+void setValueImpl(kuksa::val::v1::Datapoint *dp, int8_t value) {
+  dp->set_int32(value);
+}
+void setValueImpl(kuksa::val::v1::Datapoint *dp, int16_t value) {
+  dp->set_int32(value);
 }
 void setValueImpl(kuksa::val::v1::Datapoint *dp, int32_t value) {
   dp->set_int32(value);
@@ -58,17 +79,14 @@ void setValueImpl(kuksa::val::v1::Datapoint *dp, int32_t value) {
 void setValueImpl(kuksa::val::v1::Datapoint *dp, int64_t value) {
   dp->set_int64(value);
 }
-void setValueImpl(kuksa::val::v1::Datapoint *dp, uint32_t value) {
-  dp->set_int32(value);
-}
-void setValueImpl(kuksa::val::v1::Datapoint *dp, uint64_t value) {
-  dp->set_int64(value);
-}
 void setValueImpl(kuksa::val::v1::Datapoint *dp, float value) {
   dp->set_float_(value);
 }
 void setValueImpl(kuksa::val::v1::Datapoint *dp, double value) {
   dp->set_double_(value);
+}
+void setValueImpl(kuksa::val::v1::Datapoint *dp, const std::string &value) {
+  dp->set_string(value);
 }
 
 //=============================================================================
@@ -373,19 +391,23 @@ void KuksaClient::setValueInternalImpl(const std::string &entryPath, const T &ne
     std::cerr << "Set() global error: " << response.error().message() << std::endl;
   } else {
     if (field == FT_ACTUATOR_TARGET) {
-      std::cout << "SetTargetValue(): Updated \"" << entryPath << "\" - " << newValue << std::endl;
+      std::cout << "SetTargetValue(): Updated \"" << entryPath << "\" - " << (int)newValue << std::endl;
     } else { // FT_VALUE
-      std::cout << "SetCurrentValue(): Updated \"" << entryPath << "\" - " << newValue << std::endl;
+      std::cout << "SetCurrentValue(): Updated \"" << entryPath << "\" - " << (int)newValue << std::endl;
     }
   }
 }
 
 // Explicit instantiation for bool
 template void KuksaClient::setValueInternalImpl<bool>(const std::string&, const bool&, int);
-template void KuksaClient::setValueInternalImpl<int32_t>(const std::string&, const int32_t&, int);
-template void KuksaClient::setValueInternalImpl<int64_t>(const std::string&, const int64_t&, int);
+template void KuksaClient::setValueInternalImpl<uint8_t>(const std::string&, const uint8_t&, int);
+template void KuksaClient::setValueInternalImpl<uint16_t>(const std::string&, const uint16_t&, int);
 template void KuksaClient::setValueInternalImpl<uint32_t>(const std::string&, const uint32_t&, int);
 template void KuksaClient::setValueInternalImpl<uint64_t>(const std::string&, const uint64_t&, int);
+template void KuksaClient::setValueInternalImpl<int8_t>(const std::string&, const int8_t&, int);
+template void KuksaClient::setValueInternalImpl<int16_t>(const std::string&, const int16_t&, int);
+template void KuksaClient::setValueInternalImpl<int32_t>(const std::string&, const int32_t&, int);
+template void KuksaClient::setValueInternalImpl<int64_t>(const std::string&, const int64_t&, int);
 template void KuksaClient::setValueInternalImpl<float>(const std::string&, const float&, int);
 template void KuksaClient::setValueInternalImpl<double>(const std::string&, const double&, int);
 

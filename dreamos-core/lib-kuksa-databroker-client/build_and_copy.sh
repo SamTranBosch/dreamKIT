@@ -4,7 +4,12 @@ set -e
 
 # Define the target platforms.
 # You can extend the array with other platforms as needed.
+# platforms=("linux/amd64")
 platforms=("linux/arm64" "linux/amd64")
+
+# Specific - multi-arch build
+# - Enable Docker Buildx (if not already enabled) > Run the docker container
+docker buildx create --name kuksa-databroker-client-multiarch-build --use
 
 # Loop through each platform.
 for platform in "${platforms[@]}"; do

@@ -13,13 +13,8 @@
 #include <thread>
 #include <vector>
 
-// nlohmann/json (header-only)
-#include <nlohmann/json.hpp>
 
 namespace KuksaClient {
-
-// Convenience alias for JSON.
-using json = nlohmann::json;
 
 //------------------------------------------------------------------------------
 // Configuration structure declaration
