@@ -1,0 +1,68 @@
+{
+  "broker": {
+    "host": "3.239.90.138",
+    "port": 80,
+    "username": "etas",
+    "password": "etas"
+  },
+  "databroker": {
+    "host": "127.0.0.1",
+    "port": 55555,
+    "insecure": true,
+    "token": ""
+  },
+  "signal": [
+    {
+      "path": "Vehicle.Cabin.Seat.Row1.Pos1.Position",
+      "value": 3
+    },
+    {
+      "path": "Vehicle.Body.Lights.IsLowBeamOn",
+      "value": true
+    },
+    {
+      "path": "Vehicle.Body.Lights.IsHazardOn",
+      "value": true
+    },
+    {
+      "path": "Vehicle.Body.Lights.IsBrakeOn",
+      "value": true
+    },
+    {
+      "path": "Vehicle.Cabin.HVAC.Station.Row1.Left.FanSpeed",
+      "value": 86
+    },
+    {
+      "path": "Vehicle.Cabin.HVAC.Station.Row1.Right.FanSpeed",
+      "value": 87
+    }
+  ],
+  "actuator": [
+    {
+      "path": "Vehicle.Cabin.Seat.Row1.Pos1.Position",
+      "value": 3
+    },
+    {
+      "path": "Vehicle.Body.Lights.IsLowBeamOn",
+      "value": true
+    },
+    {
+      "path": "Vehicle.Body.Lights.IsHazardOn",
+      "value": true
+    },
+    {
+      "path": "Vehicle.Body.Lights.IsBrakeOn",
+      "value": true
+    },
+    {
+      "path": "Vehicle.Cabin.HVAC.Station.Row1.Left.FanSpeed",
+      "value": 86
+    },
+    {
+      "path": "Vehicle.Cabin.HVAC.Station.Row1.Right.FanSpeed",
+      "value": 87
+    }
+  ],
+  "debug": true,
+  "instance": "10"
+}

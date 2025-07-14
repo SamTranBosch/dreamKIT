@@ -40,7 +40,7 @@ Page {
             Layout.fillWidth: true
             Layout.fillHeight: true
             modelData: vm.appsModel
-            onAppSelected: function(idx) { vm.prepareInstall(idx) }
+            onAppSelected: function(idx) { vm.appSelected(idx) }
         }
     }
 

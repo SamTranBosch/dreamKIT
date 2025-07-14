@@ -23,7 +23,7 @@ int main(int argc, char *argv[])
     qmlRegisterType<AppListModel>("MyApp",1,0,"AppListModel");
     qmlRegisterType<MarketplaceViewModel>("MyApp",1,0,"MarketplaceViewModel");
 
-    qmlRegisterType<ServicesAsync>("ServicesAsync", 1, 0, "ServicesAsync");
+    qmlRegisterType<VsersAsync>("VsersAsync", 1, 0, "VsersAsync");
     qmlRegisterType<VappsAsync>("VappsAsync", 1, 0, "VappsAsync");
     qmlRegisterType<ControlsAsync>("ControlsAsync", 1, 0, "ControlsAsync");
 

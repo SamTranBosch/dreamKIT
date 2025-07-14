@@ -1,98 +1,130 @@
 #include "vapiclient.hpp"
 
-namespace VAPI {
 
-VAPIClient::VAPIClient() {
-    // Initially, no connections are set up.
+VAPIClient& VAPIClient::instance() {
+  static VAPIClient inst;
+  return inst;
 }
+
+VAPIClient::VAPIClient() = default;
 
 VAPIClient::~VAPIClient() {
-    // All DataBrokerClient instances will be destroyed automatically.
+  shutdown();
 }
 
-void VAPIClient::connectToServer(const std::string &serverURI) {
-    // Only connect if a client for serverURI does not already exist.
-    if (mClients.find(serverURI) == mClients.end()) {
-        auto client = std::make_unique<KuksaClient::DataBrokerClient>();
-        client->Connect(serverURI);
-        client->GetServerInfo();
-        mClients[serverURI] = std::move(client);
-        std::cout << "Connected to server " << serverURI << std::endl;
-    } else {
-        std::cout << "Already connected to " << serverURI << std::endl;
-    }
+bool VAPIClient::connectToServer(const std::string &serverURI,
+                                 const std::vector<std::string> &signalPaths) {
+  std::lock_guard lock(mClientsMtx_);
+  if (mClients_.count(serverURI)) {
+    std::cout << "[VAPIClient] Already connected to " << serverURI << "\n";
+    return true;
+  }
+
+  // build config
+  KuksaClient::Config cfg;
+  cfg.serverURI   = serverURI;
+  cfg.debug       = false;
+  cfg.signalPaths = signalPaths;
+
+  try {
+    auto client = std::make_unique<KuksaClient::KuksaClient>(cfg);
+    client->connect();
+    client->getServerInfo();
+
+    ClientEntry entry;
+    entry.client = std::move(client);
+    mClients_.try_emplace(serverURI, std::move(entry));
+
+    std::cout << "[VAPIClient] Connected to " << serverURI << "\n";
+    return true;
+  }
+  catch (const std::exception &e) {
+    std::cerr << "[VAPIClient] Failed to connect to "
+              << serverURI << ": " << e.what() << "\n";
+    return false;
+  }
 }
 
-KuksaClient::DataBrokerClient* VAPIClient::getClient(const std::string &serverURI) {
-    auto it = mClients.find(serverURI);
-    if (it != mClients.end()) {
-        return it->second.get();
-    }
+KuksaClient::KuksaClient*
+VAPIClient::findClient(const std::string &serverURI) {
+  std::lock_guard lock(mClientsMtx_);
+  auto it = mClients_.find(serverURI);
+  if (it == mClients_.end()) {
+    std::cerr << "[VAPIClient] No client for server " << serverURI << "\n";
     return nullptr;
+  }
+  return it->second.client.get();
 }
 
 bool VAPIClient::getCurrentValue(const std::string &serverURI,
                                  const std::string &path,
-                                 std::string &value) {
-    auto client = getClient(serverURI);
-    if (client) {
-        return client->GetCurrentValue(path, value);
-    } else {
-        std::cerr << "Client for server " << serverURI << " not found." << std::endl;
-        return false;
-    }
+                                 std::string       &outValue) {
+  auto *c = findClient(serverURI);
+  if (!c) return false;
+  outValue = c->getCurrentValue(path);
+  return !outValue.empty();
 }
 
 bool VAPIClient::getTargetValue(const std::string &serverURI,
-    const std::string &path,
-    std::string &value) {
-    auto client = getClient(serverURI);
-    if (client) {
-        return client->GetTargetValue(path, value);
-    } else {
-        std::cerr << "Client for server " << serverURI << " not found." << std::endl;
-        return false;
-    }
+                                const std::string &path,
+                                std::string       &outValue) {
+  auto *c = findClient(serverURI);
+  if (!c) return false;
+  outValue = c->getTargetValue(path);
+  return !outValue.empty();
 }
 
-// Inside VAPIClient::subscribe
-void VAPIClient::subscribe(const std::string &serverURI,
-    const std::vector<std::string> &signalPaths,
-    const KuksaClient::DataBrokerClient::Callback &userCallback) {
+bool VAPIClient::subscribeCurrent(const std::string               &serverURI,
+                                  const std::vector<std::string> &paths,
+                                  SubscribeCallback               callback) {
+  auto *c = findClient(serverURI);
+  if (!c) return false;
 
-    auto client = getClient(serverURI);
-    if (client) {
-        auto subManager = std::make_unique<KuksaClient::SubscriptionManager>(*client, signalPaths);
-        subManager->startSubscriptions(userCallback);
-        subManager->detachAll();
-        mSubscriptionManagers.push_back({std::move(subManager)});
-    } else {
-        std::cerr << "Client for server " << serverURI << " not found: cannot subscribe." << std::endl;
+  // fire off one thread per path
+  {
+    std::lock_guard lock(mClientsMtx_);
+    auto &entry = mClients_.at(serverURI);
+    for (auto &p : paths) {
+      entry.subThreads.emplace_back(
+        [c, p, callback]() {
+          c->subscribeCurrentValue(p, callback);
+        }
+      );
     }
+  }
+  return true;
 }
 
-void VAPIClient::subscribeTarget(const std::string &serverURI,
-    const std::vector<std::string> &signalPaths,
-    const KuksaClient::DataBrokerClient::Callback &userCallback) {
+bool VAPIClient::subscribeTarget(const std::string               &serverURI,
+                                 const std::vector<std::string> &paths,
+                                 SubscribeCallback               callback) {
+  auto *c = findClient(serverURI);
+  if (!c) return false;
 
-    auto client = getClient(serverURI);
-    if (client) {
-        auto subManager = std::make_unique<KuksaClient::SubscriptionManager>(*client, signalPaths);
-        subManager->startTargetSubscriptions(userCallback);
-        subManager->detachAll();
-        mSubscriptionManagers.push_back({std::move(subManager)});
-    } else {
-        std::cerr << "Client for server " << serverURI << " not found: cannot subscribe." << std::endl;
+  {
+    std::lock_guard lock(mClientsMtx_);
+    auto &entry = mClients_.at(serverURI);
+    for (auto &p : paths) {
+      entry.subThreads.emplace_back(
+        [c, p, callback]() {
+          c->subscribeTargetValue(p, callback);
+        }
+      );
     }
+  }
+  return true;
 }
 
-void VAPIClient::getServerInfo(const std::string &serverURI) {
-    auto client = getClient(serverURI);
-    if (client) {
-        client->GetServerInfo();
-    } else {
-        std::cerr << "Client for server " << serverURI << " not found." << std::endl;
+void VAPIClient::shutdown() {
+  std::lock_guard lock(mClientsMtx_);
+  for (auto &kv : mClients_) {
+    auto &entry = kv.second;
+    // join any subscription threads
+    for (auto &t : entry.subThreads) {
+      if (t.joinable()) t.join();
     }
+    entry.subThreads.clear();
+    // unique_ptr<KuksaClient> will be destroyed here
+  }
+  mClients_.clear();
 }
-
-} // namespace VAPI

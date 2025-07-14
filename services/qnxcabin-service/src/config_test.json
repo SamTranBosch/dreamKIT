@@ -1,0 +1,38 @@
+{
+  "broker": {
+    "host": "test.mosquitto.org",
+    "port": 1883,
+    "username": "etas",
+    "password": "etas"
+  },
+  "signal": [
+    {
+      "path": "Vehicle.Cabin.Seat.Row1.Pos1.Position",
+      "value": 40
+    },
+    {
+      "path": "Vehicle.Body.Lights.IsLowBeamOn",
+      "value": false
+    },
+    {
+      "path": "Vehicle.Body.Lights.IsHazardOn",
+      "value": false
+    },
+    {
+      "path": "Vehicle.Body.Lights.IsBrakeOn",
+      "value": false
+    }
+  ],
+  "actuator": [
+    {
+      "path": "Vehicle.Cabin.HVAC.Station.Row1.Left.FanSpeed",
+      "value": 40
+    },
+    {
+      "path": "Vehicle.Cabin.HVAC.Station.Row1.Right.FanSpeed",
+      "value": 40
+    }
+  ],
+  "debug": true,
+  "instance": "10"
+}

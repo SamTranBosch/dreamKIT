@@ -9,6 +9,7 @@
 #include <QList>
 #include <QFileSystemWatcher>
 #include <QTimer>
+#include <QProcess>
 
 typedef struct {
     QString id;
@@ -23,8 +24,6 @@ typedef struct {
     bool isInstalled;
     bool isSubscribed;
 } VappsListStruct;
-
-void readServicesList(const QString searchName, QList<VappsListStruct> &VappsListInfo);
 
 
 class VappsAsync;
@@ -55,7 +54,7 @@ class VappsAsync: public QObject
 public:
     VappsAsync();
 
-    Q_INVOKABLE void initInstalledVappsFromDB();
+    Q_INVOKABLE void initInstalledFromDB();
 
     Q_INVOKABLE void executeServices(int appIdx, const QString name, const QString appId, bool isSubscribed);
 
@@ -74,13 +73,13 @@ public Q_SLOTS:
     void handleResults(QString appId, bool isStarted, QString msg);
     void fileChanged(const QString& path);
     void checkRunningAppSts();
+    void onInstallerFinished(int exitCode, QProcess::ExitStatus status);
 
 private:
     QList<VappsListStruct> installedVappsList;
     InstalledVappsCheckThread *m_workerThread;
     QTimer *m_timer_apprunningcheck;
-
-    void removeObjectById(const QString &filePath, const QString &idToRemove);
+    QProcess* m_installer;
 };
 
 #endif //INSTALLEDVAPPS_H

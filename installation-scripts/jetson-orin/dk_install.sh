@@ -311,7 +311,7 @@ main() {
     DOCKER_SHARE_PARAM="-v /var/run/docker.sock:/var/run/docker.sock -v /usr/bin/docker:/usr/bin/docker"
     DOCKER_AUDIO_PARAM="--device /dev/snd --group-add audio -e PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native -v ${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native -v $HOME_DIR/.config/pulse/cookie:/root/.config/pulse/cookie"
     LOG_LIMIT_PARAM="--log-opt max-size=10m --log-opt max-file=3"
-    DOCKER_HUB_NAMESPACE="ghcr.io/eclipse-autowrx"
+    DOCKER_HUB_NAMESPACE="ghcr.io/samtranbosch"
     
     show_success "Runtime configuration completed"
     
@@ -397,7 +397,7 @@ main() {
     
     if [[ "$dk_ivi_value" == "true" ]]; then
         show_info "Installing IVI interface..."
-        run_with_feedback "$CURRENT_DIR/scripts/dk_enable_xhost.sh" "X11 forwarding enabled" "X11 setup failed"
+        run_with_feedback "sudo $CURRENT_DIR/scripts/dk_enable_xhost.sh" "X11 forwarding enabled" "X11 setup failed"
         run_with_feedback "docker pull $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI image downloaded" "Failed to download IVI"
         run_with_feedback "xhost +local:docker" "Docker X11 access granted" "X11 access failed"
         
@@ -417,7 +417,7 @@ main() {
         
         if [[ "$install_ivi_choice" =~ ^[Yy]$ ]]; then
             echo -e "\n${GREEN}Installing IVI interface...${NC}"
-            run_with_feedback "$CURRENT_DIR/scripts/dk_enable_xhost.sh" "X11 forwarding enabled" "X11 setup failed"
+            run_with_feedback "sudo $CURRENT_DIR/scripts/dk_enable_xhost.sh" "X11 forwarding enabled" "X11 setup failed"
             run_with_feedback "docker pull $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI image downloaded" "Failed to download IVI"
             run_with_feedback "xhost +local:docker" "Docker X11 access granted" "X11 access failed"
             

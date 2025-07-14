@@ -1,109 +1,26 @@
 #include "installedservices.hpp"
-#include "unsafeparamcheck.hpp"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QThread>
 #include <QDebug>
 #include <QMutex>
+#include "../marketplace/datamanager.hpp"
 
-QMutex installedServicesMutex;
+#include "../installedservices/unsafeparamcheck.hpp"
+
+QMutex dk_installedsersMutex;
 
 extern QString DK_VCU_USERNAME;
 extern QString DK_ARCH;
 extern QString DK_DOCKER_HUB_NAMESPACE;
 extern QString DK_CONTAINER_ROOT;
-extern QString DK_VIP;
 
-QString DK_VIP_PWD;
-QString DK_VIP_USER;
-QString DK_VIP_IP;
-QString DK_XIP_IP;
+QString DK_INSTALLED_SERS_FOLDER = "";
 
-QString DK_INSTALLED_SERVICE_FOLDER = "";
-
-CheckAppRunningThread::CheckAppRunningThread(ServicesAsync *parent)
+InstalledVsersCheckThread::InstalledVsersCheckThread(VsersAsync *parent)
 {
-    QString mpDataPath = DK_INSTALLED_SERVICE_FOLDER + "installedservices.json";
-
-    m_serviceAsync = parent;
-}
-
-void CheckAppRunningThread::run()
-{
-    while(1) {
-        if (isVipReachable()) {
-            m_serviceAsync->m_is_vip_connected = true;
-        }
-        else {
-            m_serviceAsync->m_is_vip_connected = false;
-        }
-        checkRunningAppSts();
-    }
-}
-
-bool CheckAppRunningThread::isVipReachable() {
-    if (DK_VIP == "true") {
-        // Construct ping command - send 1 packet with timeout 1 second
-        QString cmd = "ping -c 2 -W 1 " + DK_VIP_IP + " > /dev/null 2>&1";
-
-        // system() returns 0 if the command succeeded (host reachable)
-        int ret = system(cmd.toUtf8());;
-
-        return (ret == 0);
-    }
-    else {
-        return false;
-    }
-}
-
-void CheckAppRunningThread::checkRunningAppSts()
-{    
-    QString appStsLog = DK_INSTALLED_SERVICE_FOLDER + "checkRunningServicesSts.log";
-    QString cmd = "> " + appStsLog + "; docker ps > " + appStsLog;
-    if (m_serviceAsync->m_is_vip_connected && m_serviceAsync->m_is_vip_service_installed) {
-        cmd = "(> " + appStsLog + "; docker ps ; ";  
-        cmd += "sshpass -p '" + DK_VIP_PWD + "' ssh -o StrictHostKeyChecking=no " + DK_VIP_USER + "@" + DK_VIP_IP + " 'docker ps' ) > ";
-        cmd += appStsLog;
-        // cmd += " & ";
-    }
-    system(cmd.toUtf8());
-
-    // qDebug() << "checkRunningAppSts cmd: " << cmd;
-    
-    QThread::msleep(500);
-    QFile logFile(appStsLog);
-    if (!logFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qCritical() << "Failed to open log file: checkRunningServicesSts.log";
-        return;
-    }
-
-    QTextStream in(&logFile);
-    QString content = in.readAll();
-
-    if (content.isEmpty()) {
-        qCritical() << "Log file is empty or could not be read.";
-        return;
-    }
-
-    int len = m_serviceAsync->installedServicesList.size();
-    // qDebug() << __func__ << "@" << __LINE__ <<  " : installedServicesList len: " << len;
-    for (int i = 0; i < len; i++) {
-        if (!m_serviceAsync->installedServicesList[i].id.isEmpty()) {
-            if (content.contains(m_serviceAsync->installedServicesList[i].id)) {
-                // qDebug() << "App ID" << installedServicesList[i].appId << "is running.";
-                m_serviceAsync->updateServicesRunningSts(m_serviceAsync->installedServicesList[i].id, true, i);
-            } else {
-                // qDebug() << "App ID" << installedServicesList[i].appId << "is not running.";
-                m_serviceAsync->updateServicesRunningSts(m_serviceAsync->installedServicesList[i].id, false, i);
-            }
-        }        
-    }
-}
-
-InstalledServicesCheckThread::InstalledServicesCheckThread(ServicesAsync *parent)
-{
-    QString mpDataPath = DK_INSTALLED_SERVICE_FOLDER + "installedservices.json";
+    QString mpDataPath = DK_INSTALLED_SERS_FOLDER + "installedservices.json";
     // qDebug() << __func__ << "@" << __LINE__ <<  " : mpDataPath: " << mpDataPath;
 
     m_serviceAsync = parent;
@@ -120,27 +37,22 @@ InstalledServicesCheckThread::InstalledServicesCheckThread(ServicesAsync *parent
     }
 }
 
-void InstalledServicesCheckThread::triggerCheckAppStart(QString id, QString name)
+void InstalledVsersCheckThread::triggerCheckAppStart(QString id, QString name)
 {
     m_appId = id;
     m_appName = name;
     m_istriggeredAppStart = true;
 }
 
-void InstalledServicesCheckThread::run()
+void InstalledVsersCheckThread::run()
 {
-    QString dockerps = DK_INSTALLED_SERVICE_FOLDER + "listservicescmd.log";
+    QString dockerps = DK_INSTALLED_SERS_FOLDER + "listappscmd.log";
     QString cmd = "";     
 
     while(1) {
         if (m_istriggeredAppStart && !m_appId.isEmpty() && !m_appName.isEmpty()) {
-            QThread::msleep(5000); // workaround: wait 2s for the app to start. TODO: consider to check if the start time is more than 2s
+            QThread::msleep(3000); // workaround: wait 2s for the app to start. TODO: consider to check if the start time is more than 2s
             cmd = "docker ps > " + dockerps;
-            if (m_serviceAsync->m_is_vip_connected && m_serviceAsync->m_is_vip_service_installed) {
-                cmd = "(docker ps ; ";
-                cmd += "sshpass -p '" + DK_VIP_PWD + "' ssh -o StrictHostKeyChecking=no " + DK_VIP_USER + "@" + DK_VIP_IP + " 'docker ps' ) > ";
-                cmd += dockerps;
-            }
             system(cmd.toUtf8()); 
             QThread::msleep(10);
             QFile MyFile(dockerps);
@@ -166,86 +78,117 @@ void InstalledServicesCheckThread::run()
     }
 }
 
-ServicesAsync::ServicesAsync()
+VsersAsync::VsersAsync()
 {
-    if(DK_CONTAINER_ROOT.isEmpty()) {
+    if (DK_CONTAINER_ROOT.isEmpty())
         DK_CONTAINER_ROOT = qgetenv("DK_CONTAINER_ROOT");
-    }
 
-    DK_VIP = qgetenv("DK_VIP");
-    
-    DK_INSTALLED_SERVICE_FOLDER = DK_CONTAINER_ROOT + "dk_installedservices/";
-    qDebug() << __func__ << "@" << __LINE__ <<  " : DK_INSTALLED_SERVICE_FOLDER: " << DK_INSTALLED_SERVICE_FOLDER;
+    DK_INSTALLED_SERS_FOLDER = DK_CONTAINER_ROOT + "dk_marketplace/";
+    qDebug() << __func__ << "DK_INSTALLED_SERS_FOLDER:" << DK_INSTALLED_SERS_FOLDER;
 
-    parseSystemCfg();
+    // --- installer process for kubectl calls ---
+    m_installer = new QProcess(this);
+    m_installer->setProcessChannelMode(QProcess::MergedChannels);
+    connect(m_installer, &QProcess::started, this, [](){
+        qDebug() << "[Installer] started";
+    });
+    connect(m_installer,
+            QOverload<QProcess::ProcessError>::of(&QProcess::errorOccurred),
+            this,
+            [this](QProcess::ProcessError err){
+        qWarning() << "[Installer] error:" << err
+                   << m_installer->errorString();
+    });
+    connect(m_installer,
+            QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
+            this,
+            &VsersAsync::onInstallerFinished);
 
-    m_workerThread = new InstalledServicesCheckThread(this);
-    connect(m_workerThread, &InstalledServicesCheckThread::resultReady, this, &ServicesAsync::handleResults);
-    connect(m_workerThread, &InstalledServicesCheckThread::finished, m_workerThread, &QObject::deleteLater);
-    m_workerThread->start();
+    // --- existing threads & timers ---
+    m_workerThread = new InstalledVsersCheckThread(this);
+    // … connect resultReady, start thread …
 
-    m_checkAppRunningThread = new CheckAppRunningThread(this);
-    m_checkAppRunningThread->start();
+    m_timer_apprunningcheck = new QTimer(this);
+    connect(m_timer_apprunningcheck, &QTimer::timeout,
+            this, &VsersAsync::checkRunningAppSts);
+    m_timer_apprunningcheck->start(3000);
+
+    m_logStreamer = nullptr;
 }
 
-void ServicesAsync::parseSystemCfg()
+void VsersAsync::streamLogs(int appIdx)
 {
-    QString path = DK_CONTAINER_ROOT + "dk_manager/dk_system_cfg.json";
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qWarning() << "Cannot open file:" << path;
+    if (m_logStreamer) {
+        stopLogStream();
+    }
+
+    if (appIdx < 0 || appIdx >= installedVappsList.size()) {
+        qWarning() << "[streamLogs] Invalid index:" << appIdx;
         return;
     }
 
-    QByteArray jsonData = file.readAll();
-    file.close();
+    const auto& app = installedVappsList[appIdx];
+    QString appName = app.name.toLower();
 
-    // Parse JSON
-    QJsonParseError parseError;
-    QJsonDocument doc = QJsonDocument::fromJson(jsonData, &parseError);
+    m_logStreamer = new QProcess(this);
+    m_logStreamer->setProcessChannelMode(QProcess::MergedChannels);
 
-    if (parseError.error != QJsonParseError::NoError) {
-        qWarning() << "JSON parse error:" << parseError.errorString();
-        return;
-    }
+    connect(m_logStreamer, &QProcess::readyReadStandardOutput, this, &VsersAsync::onNewLogData);
+    connect(m_logStreamer, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, [this](int, QProcess::ExitStatus){
+        qDebug() << "[LogStreamer] finished.";
+        stopLogStream();
+    });
 
-    if (!doc.isObject()) {
-        qWarning() << "JSON is not an object";
-        return;
-    }
-
-    QJsonObject rootObj = doc.object();
-
-    // Parse "xip" object
-    if (rootObj.contains("xip") && rootObj["xip"].isObject()) {
-        QJsonObject xipObj = rootObj["xip"].toObject();
-        DK_XIP_IP = xipObj.value("ip").toString();
-    }
-    qDebug() << "DK_XIP_IP: " << DK_XIP_IP;
-
-    // Parse "vip" object
-    if (rootObj.contains("vip") && rootObj["vip"].isObject()) {
-        QJsonObject vipObj = rootObj["vip"].toObject();
-        DK_VIP_IP = vipObj.value("ip").toString();
-        DK_VIP_USER = vipObj.value("user").toString();
-        DK_VIP_PWD = vipObj.value("pwd").toString();
-    }
-    qDebug() << "DK_VIP_IP: " << DK_VIP_IP;
-    qDebug() << "DK_VIP_USER: " << DK_VIP_USER;
-    qDebug() << "DK_VIP_PWD: " << DK_VIP_PWD;
+    QString cmd = QString("kubectl logs -f -l app=%1").arg(appName);
+    qDebug() << "[LogStreamer] START:" << cmd;
+    m_logStreamer->start("sh", QStringList{"-c", cmd});
 }
 
-Q_INVOKABLE void ServicesAsync::openAppEditor(int idx)
+void VsersAsync::stopLogStream()
+{
+    if (m_logStreamer && m_logStreamer->state() != QProcess::NotRunning) {
+        qDebug() << "[LogStreamer] STOP";
+        m_logStreamer->terminate();
+        m_logStreamer->waitForFinished(1000);
+        m_logStreamer->deleteLater();
+        m_logStreamer = nullptr;
+    }
+}
+
+void VsersAsync::onNewLogData()
+{
+    if (!m_logStreamer) return;
+    QByteArray data = m_logStreamer->readAllStandardOutput();
+    if (!data.isEmpty()) {
+        emit newLogMessage(QString::fromUtf8(data));
+    }
+}
+
+void VsersAsync::onInstallerFinished(int exitCode,
+                                     QProcess::ExitStatus status)
+{
+    qDebug() << "[Installer] finished code=" << exitCode
+             << "status=" << status
+             << "\noutput:\n" << m_installer->readAll();
+
+    // if apply succeeded and we just deployed, trigger the running‐check
+    if (status==QProcess::NormalExit && exitCode==0) {
+        // here you can trigger your thread to watch for the pod
+        // e.g. m_workerThread->triggerCheckAppStart(appId, name);
+    }
+}
+
+Q_INVOKABLE void VsersAsync::openAppEditor(int idx)
 {
     qDebug() << __func__ << __LINE__ << " index = " << idx;
 
-    if (idx >= installedServicesList.size()) {
+    if (idx >= installedVappsList.size()) {
         qDebug() << "index out of range";
         return;
     }
 
-    QString thisServiceFolder = DK_INSTALLED_SERVICE_FOLDER + installedServicesList[idx].id;
-    QString vsCodeUserDataFolder = DK_INSTALLED_SERVICE_FOLDER + "/vscode_user_data";
+    QString thisServiceFolder = DK_INSTALLED_SERS_FOLDER + installedVappsList[idx].id;
+    QString vsCodeUserDataFolder = DK_INSTALLED_SERS_FOLDER + "/vscode_user_data";
     QString cmd;
     cmd = "mkdir -p " + vsCodeUserDataFolder + ";";
     cmd += "code " + thisServiceFolder + " --no-sandbox --user-data-dir=" + vsCodeUserDataFolder + ";";
@@ -253,347 +196,200 @@ Q_INVOKABLE void ServicesAsync::openAppEditor(int idx)
     system(cmd.toUtf8());
 }
 
-Q_INVOKABLE void ServicesAsync::initInstalledServicesFromDB()
+Q_INVOKABLE void VsersAsync::initInstalledFromDB()
 {
-    installedServicesMutex.lock();
-    m_is_vip_service_installed = false;
+    QMutexLocker lock(&dk_installedsersMutex);
 
     clearServicesListView();
-    installedServicesList.clear();
+    installedVappsList.clear();
 
-    QString mpDataPath = DK_INSTALLED_SERVICE_FOLDER + "installedservices.json";
-    qDebug() << __func__ << "@" << __LINE__ <<  " : mpDataPath: " << mpDataPath;
+    // use the same track file as DataManager elsewhere
+    QString trackFile = DK_INSTALLED_SERS_FOLDER + "installedservices.json";
 
-    // Read the JSON file
-    QFile file(mpDataPath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qDebug() << "Failed to open file.";
-        return;
+    // load (or create) a JSON array
+    QJsonDocument doc = DataManager::loadJsonFile(
+                             trackFile,
+                             QJsonValue(QJsonArray()));
+    QJsonArray arr = doc.isArray() ? doc.array() : QJsonArray();
+
+    for (auto v : arr) {
+        if (!v.isObject()) continue;
+        QJsonObject o = v.toObject();
+
+        VsersListStruct app;
+        app.id          = o.value("id").toString();
+        app.name        = o.value("name").toString();
+        app.author      = o.value("author").toString();
+        app.rating      = o.value("rating").toString();
+        app.iconPath    = o.value("iconPath").toString();
+        app.isInstalled = true;  // by definition in this file
+        app.isSubscribed= o.value("subscribed").toBool();
+
+        installedVappsList.append(app);
     }
 
-    QByteArray jsonData = file.readAll();
-    file.close();
+    qDebug() << "Loaded" << installedVappsList.size()
+             << "installed apps from" << trackFile;
 
-    // Parse the JSON data
-    QJsonDocument document = QJsonDocument::fromJson(jsonData);
-    if (document.isNull() || !document.isArray()) {
-        qDebug() << __func__ << "@" << __LINE__ << ": Invalid JSON format.\n" << jsonData;
-        return;
+    // populate your UI list
+    for (const auto &app : installedVappsList) {
+        appendServicesInfoToServicesList(
+            app.name, app.author,
+            app.rating, app.noofdownload,
+            app.iconPath, app.isInstalled,
+            app.id, app.isSubscribed);
     }
-
-    QJsonArray jsonArray = document.array();
-
-    // Loop through each item in the array
-    for (const QJsonValue &value : jsonArray) {
-        if (!value.isObject()) {
-            continue;
-        }
-
-        QJsonObject jsonObject = value.toObject();
-        ServicesListStruct appInfo;
-
-        // Extract relevant fields for ServicesListStruct
-        appInfo.id = jsonObject["_id"].toString();
-        appInfo.category = jsonObject["category"].toString();        
-
-        // Extract relevant fields for ServicesListStruct
-        appInfo.name = jsonObject["name"].toString();
-
-        // Extract author from 'createdBy' object
-        // QJsonObject createdBy = jsonObject["createdBy"].toObject();
-        // if (createdBy.contains("descriptor")) {
-        //     QJsonDocument descriptorDoc = QJsonDocument::fromJson(createdBy["descriptor"].toString().toUtf8());
-        //     QJsonObject descriptorObj = descriptorDoc.object();
-        //     appInfo.author = descriptorObj["name"].toString();
-        // } else if (createdBy.contains("fullName")) {
-        //     appInfo.author = createdBy["fullName"].toString();
-        // } else {
-        //     appInfo.author = "Unknown";
-        // }
-        
-        QJsonObject storeId = jsonObject["storeId"].toObject();
-        if (storeId.contains("name")) {
-            appInfo.author = storeId["name"].toString();
-        } 
-        else {
-            appInfo.author = "Unknown";
-        }
-
-        // Extract rating (if it exists)
-        appInfo.rating = jsonObject["rating"].isNull() ? "**" : QString::number(jsonObject["rating"].toDouble());
-
-        // Extract number of downloads
-        appInfo.noofdownload = QString::number(jsonObject["downloads"].toInt());
-
-        // Extract thumbnail for iconPath
-        appInfo.iconPath = jsonObject["thumbnail"].toString();
-
-        // Use the name as the folder name
-        appInfo.foldername = appInfo.id;
-
-        // Extract dashboardConfig or default to empty
-        // appInfo.packagelink = jsonObject["dashboardConfig"].toString().isEmpty() ? "N/A" : jsonObject["dashboardConfig"].toString();
-        // Extract and parse dashboardConfig
-        QString dashboardConfigStr = jsonObject["dashboardConfig"].toString();
-        if (!dashboardConfigStr.isEmpty()) {
-            QJsonDocument dashboardDoc = QJsonDocument::fromJson(dashboardConfigStr.toUtf8());
-            QJsonObject dashboardObj = dashboardDoc.object();
-    
-            if (dashboardObj.contains("DockerImageURL")) {
-                appInfo.packagelink = dashboardObj["DockerImageURL"].toString();
-            } else {
-                appInfo.packagelink = "N/A";
-            }
-
-            if (dashboardObj.contains("Target")) {
-                appInfo.deploytarget = dashboardObj["Target"].toString();
-            } else {
-                appInfo.deploytarget = "xip";
-            }
-            if (appInfo.deploytarget == "vip") {
-                m_is_vip_service_installed = true;
-            }
-
-        } else {
-            appInfo.packagelink = "N/A";
-        }
-
-        // For this example, assume all apps are not installed
-        appInfo.isInstalled = false;
-        appInfo.isSubscribed = false;
-
-        installedServicesList.append(appInfo);
-    }
-    qDebug() << "Services list loaded, total apps found:" << installedServicesList.size();
-
-    if (installedServicesList.size()) {
-        for(int i = 0; i < installedServicesList.size(); i++) {
-            appendServicesInfoToServicesList(installedServicesList[i].name, installedServicesList[i].author,
-                                   installedServicesList[i].rating, installedServicesList[i].noofdownload,
-                                   installedServicesList[i].iconPath,
-                                   installedServicesList[i].isInstalled,
-                                   installedServicesList[i].id,
-                                   installedServicesList[i].isSubscribed);
-        }
-    }
-
-    installedServicesMutex.unlock();
 }
 
-Q_INVOKABLE void ServicesAsync::executeServices(int appIdx, const QString name, const QString appId, bool isSubscribed)
+Q_INVOKABLE void VsersAsync::executeServices(int appIdx,
+                                             const QString name,
+                                             const QString appId,
+                                             bool isSubscribed)
 {
-    QString dockerps = DK_INSTALLED_SERVICE_FOLDER + "listservicescmd.log";
-    QString cmd = "";
+    // guard index
+    if (appIdx < 0 || appIdx >= installedVappsList.size())
+        return;
+
+    // build path to the deployment YAML we generated earlier
+    QString deployYaml = QString("%1/%2/%2_deployment.yaml")
+                         .arg(DK_INSTALLED_SERS_FOLDER, appId);
 
     if (isSubscribed) {
-        cmd = "";
-
-        QString dbc_default_path_mount = " -v /home/" + DK_VCU_USERNAME + "/.dk/dk_manager/vssmapping/dbc_default_values.json:/app/vss/dbc_default_values.json:ro ";
-        QString dbc_vss_mount = " -v /home/" + DK_VCU_USERNAME + "/.dk/dk_vssgeneration/vss.json:/app/vss/vss.json:ro ";
-        
-        QString runtimecfgfile = DK_INSTALLED_SERVICE_FOLDER + appId + "/runtimecfg.json";
-        QString safeParams = getSafeDockerParam(runtimecfgfile);
-        QString audioParams = getAudioParam(runtimecfgfile);
-
-        if (installedServicesList[appIdx].deploytarget == "vip") {
-            if (m_is_vip_connected) {
-                // "sshpass -p {DK_VIP_PWD} ssh -o StrictHostKeyChecking=no {DK_VIP_USER}@{DK_VIP_IP} 'docker pull {DK_XIP_IP}:5000/{DockerImageURL}'"
-                // docker kill dk_vrte ; docker rm dk_vrte ; docker run  --name dk_vrte --network host --privileged -it phongbosch/dk_vrte:latest
-                // start service
-                cmd += "sshpass -p '" + DK_VIP_PWD + "' ssh -o StrictHostKeyChecking=no " + DK_VIP_USER + "@" + DK_VIP_IP + " 'docker kill " + appId +  ";docker rm " + appId + ";docker run -d -it --name " + appId + " --log-opt max-size=10m --log-opt max-file=3 --network host  --privileged -v /home/.dk/dk_fota:/home/.dk/dk_fota:ro -v /home/.dk/dk_vss:/home/.dk/dk_vss:ro -v /home/.dk/dk_installedservices/" +     appId + ":/app/runtime " + DK_XIP_IP + ":5000/" + installedServicesList[appIdx].packagelink + " '";
-                qDebug() << cmd;
-                system(cmd.toUtf8());
-            }
-            else {
-                qDebug() << "VIP is not connected. Cannot start the service.";
-            }
-        }
-        else {
-            // start service
-            cmd += "docker kill " + appId + ";docker rm " + appId + ";docker run -d -it --name " + appId + " --log-opt max-size=10m --log-opt max-file=3    -v /home/" + DK_VCU_USERNAME + "/.dk/dk_installedservices/" + appId + ":/app/runtime --network host " + dbc_default_path_mount + dbc_vss_mount     + safeParams + audioParams + installedServicesList[appIdx].packagelink;
-            qDebug() << cmd;
-            system(cmd.toUtf8());
-        }
-
-        if (m_workerThread) {
-            m_workerThread->triggerCheckAppStart(appId, name);
-        }
+        // APPLY the Deployment
+        QString cmd = QString("kubectl apply -f %1").arg(deployYaml);
+        qDebug() << "[Installer] APPLY:" << cmd;
+        m_installer->start("sh", QStringList{"-c", cmd});
     }
     else {
-        cmd = "docker kill " + appId + " &";
-        if (installedServicesList[appIdx].deploytarget == "vip") {
-            cmd = "sshpass -p '" + DK_VIP_PWD + "' ssh -o StrictHostKeyChecking=no " + DK_VIP_USER + "@" + DK_VIP_IP + " 'docker kill " + appId + " '";
-        }
-        qDebug() << cmd;
-        system(cmd.toUtf8());
+        // if unsubscribing, DELETE the Deployment
+        QString cmd = QString("kubectl delete -f %1").arg(deployYaml);
+        qDebug() << "[Installer] DELETE:" << cmd;
+        m_installer->start("sh", QStringList{"-c", cmd});
     }
 }
 
-void readServicesList(const QString searchName, QList<ServicesListStruct> &ServicesListInfo) {
-    QString mpDataPath = DK_INSTALLED_SERVICE_FOLDER + "installedservices.json";
 
-    // Read the JSON file
-    QFile file(mpDataPath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qDebug() << "Failed to open file.";
-        return;
-    }
-
-    QByteArray jsonData = file.readAll();
-    file.close();
-
-    // Parse the JSON data
-    QJsonDocument document = QJsonDocument::fromJson(jsonData);
-    if (document.isNull() || !document.isArray()) {
-        qDebug() << __func__ << "@" << __LINE__ << ": Invalid JSON format.";
-        return;
-    }
-
-    QJsonArray jsonArray = document.array();
-
-    // Loop through each item in the array
-    for (const QJsonValue &value : jsonArray) {
-        if (!value.isObject()) {
-            continue;
-        }
-
-        QJsonObject jsonObject = value.toObject();
-        ServicesListStruct appInfo;
-
-        // Extract relevant fields for ServicesListStruct
-        appInfo.id = jsonObject["_id"].toString();
-        appInfo.category = jsonObject["category"].toString();        
-
-        // Extract relevant fields for ServicesListStruct
-        appInfo.name = jsonObject["name"].toString();
-
-        // Extract author from 'createdBy' object
-        QJsonObject createdBy = jsonObject["createdBy"].toObject();
-        if (createdBy.contains("descriptor")) {
-            QJsonDocument descriptorDoc = QJsonDocument::fromJson(createdBy["descriptor"].toString().toUtf8());
-            QJsonObject descriptorObj = descriptorDoc.object();
-            appInfo.author = descriptorObj["name"].toString();
-        } else if (createdBy.contains("fullName")) {
-            appInfo.author = createdBy["fullName"].toString();
-        } else {
-            appInfo.author = "Unknown";
-        }
-
-        // Extract rating (if it exists)
-        appInfo.rating = jsonObject["rating"].isNull() ? "**" : QString::number(jsonObject["rating"].toDouble());
-
-        // Extract number of downloads
-        appInfo.noofdownload = QString::number(jsonObject["downloads"].toInt());
-
-        // Extract thumbnail for iconPath
-        appInfo.iconPath = jsonObject["thumbnail"].toString();
-
-        // Use the name as the folder name
-        appInfo.foldername = appInfo.id;
-
-        // Extract dashboardConfig or default to empty
-        appInfo.packagelink = jsonObject["dashboardConfig"].toString().isEmpty() ? "N/A" : jsonObject["dashboardConfig"].toString();
-
-        // For this example, assume all apps are not installed
-        appInfo.isInstalled = false;
-
-        // Only add to the list if the name contains the searchName
-        if (appInfo.category.contains(searchName, Qt::CaseInsensitive)) {
-            ServicesListInfo.append(appInfo);
-        }
-    }
-
-    qDebug() << "Services list loaded, total apps found:" << ServicesListInfo.size();
-}
-
-void ServicesAsync::removeObjectById(const QString &filePath, const QString &idToRemove) {
-    // Open the JSON file
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qWarning() << "Failed to open file for reading:" << filePath;
-        return;
-    }
-
-    // Read the file content and close the file
-    QByteArray jsonData = file.readAll();
-    file.close();
-
-    // Parse the JSON document
-    QJsonDocument jsonDoc = QJsonDocument::fromJson(jsonData);
-    if (jsonDoc.isNull() || !jsonDoc.isArray()) {
-        qWarning() << "Invalid JSON format.";
-        return;
-    }
-
-    // Convert the JSON document to an array
-    QJsonArray jsonArray = jsonDoc.array();
-
-    // Iterate through the array and find the object with the given _id
-    for (int i = 0; i < jsonArray.size(); ++i) {
-        QJsonObject obj = jsonArray[i].toObject();
-        if (obj.contains("_id") && obj["_id"].toString() == idToRemove) {
-            // Remove the object from the array
-            jsonArray.removeAt(i);
-            qDebug() << "Object with _id:" << idToRemove << "removed.";
-            break;
-        }
-    }
-
-    // Create a new JSON document with the modified array
-    QJsonDocument updatedJsonDoc(jsonArray);
-
-    // Open the file again for writing
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
-        qWarning() << "Failed to open file for writing:" << filePath;
-        return;
-    }
-
-    // Write the updated JSON data to the file
-    file.write(updatedJsonDoc.toJson(QJsonDocument::Indented));
-    file.close();
-    qDebug() << "Updated JSON file saved.";
-}
-
-Q_INVOKABLE void ServicesAsync::removeServices(const int index)
+Q_INVOKABLE void VsersAsync::removeServices(int index)
 {
-    qDebug() << __func__ << "@" << __LINE__ <<  " : index: " << index;
-    // refresh install app view
-    //initInstalledServicesFromDB();
-    QString mpDataPath = DK_INSTALLED_SERVICE_FOLDER + "installedservices.json";
-    removeObjectById(mpDataPath, installedServicesList[index].id);
+    if (index < 0 || index >= installedVappsList.size()) return;
 
-    QString cmd;
-    QString appId = installedServicesList[index].id;
-    // delete service
-    if (installedServicesList[index].deploytarget == "vip") {
-        cmd = "sshpass -p '" + DK_VIP_PWD + "' ssh -o StrictHostKeyChecking=no " + DK_VIP_USER + "@" + DK_VIP_IP + " 'docker kill " + appId + ";docker rm " + appId + "'";
-        qDebug() << cmd;
-        system(cmd.toUtf8());
+    const QString appId = installedVappsList[index].id;
+    QString trackFile = DK_INSTALLED_SERS_FOLDER + "installedservices.json";
+
+    // load & filter out this appId
+    QJsonDocument doc = DataManager::loadJsonFile(
+                             trackFile,
+                             QJsonValue(QJsonArray()));
+    QJsonArray arr = doc.isArray() ? doc.array() : QJsonArray();
+    QJsonArray out;
+    for (auto v : arr) {
+        if (!v.isObject() || v.toObject().value("id").toString() == appId)
+            continue;
+        out.append(v);
     }
-    else {
-        cmd = "docker kill " + appId + ";docker rm " + appId;
-        qDebug() << cmd;
-        system(cmd.toUtf8());
-    }
+
+    // save the trimmed array
+    DataManager::saveJsonFile(trackFile, QJsonDocument(out));
+
+    // now delete via kubectl
+    QString deployYaml = QString("%1/%2/%2_deployment.yaml")
+                         .arg(DK_INSTALLED_SERS_FOLDER, appId);
+    QString cmd = QString("kubectl delete -f %1").arg(deployYaml);
+    qDebug() << "[Installer] DELETE:" << cmd;
+    m_installer->start("sh", QStringList{"-c", cmd});
 }
 
-void ServicesAsync::handleResults(QString appId, bool isStarted, QString msg)
+void VsersAsync::handleResults(QString appId, bool isStarted, QString msg)
 {
     updateStartAppMsg(appId, isStarted, msg);
     if (isStarted) {
-        int len = installedServicesList.size();
+        int len = installedVappsList.size();
         for (int i = 0; i < len; i++) {
-            if (installedServicesList[i].id == appId) {
-                installedServicesList[i].isSubscribed = true;
+            if (installedVappsList[i].id == appId) {
+                installedVappsList[i].isSubscribed = true;
                 return;
             }
         }
     }
 }
 
-void ServicesAsync::fileChanged(const QString &path)
+void VsersAsync::fileChanged(const QString &path)
 {
     qDebug() << __func__ << "@" << __LINE__ <<  " : path: " << path;
     QThread::msleep(1000);
-    initInstalledServicesFromDB();
+    initInstalledFromDB();
+}
+
+void VsersAsync::checkRunningAppSts()
+{
+    // If we still have outstanding checks, skip this tick:
+    if (m_pendingChecks > 0) {
+        qDebug() << "[checkRunningAppSts] still waiting on"
+                 << m_pendingChecks << "process(es), skipping.";
+        return;
+    }
+
+    // Kick off one QProcess per installed app:
+    int n = installedVappsList.size();
+    m_pendingChecks = n;
+    for (int i = 0; i < n; ++i) {
+        const auto &app = installedVappsList[i];
+        // If no ID, immediately report “not running”:
+        // if (app.id.isEmpty()) {
+        //     updateServicesRunningSts(app.id, false, i);
+        //     --m_pendingChecks;
+        //     continue;
+        // }
+
+        // Make a transient QProcess
+        QProcess *proc = new QProcess(this);
+        proc->setProgram("kubectl");
+        proc->setArguments(QStringList{
+            "get", "pods",
+            "-l", QString("app=%1").arg(app.name.toLower()),
+            "-o", "json"
+        });
+        proc->setProcessChannelMode(QProcess::MergedChannels);
+
+        // When it finishes, parse the JSON and emit status
+        connect(proc, QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
+                this,
+                [this, proc, app, i](int exitCode, QProcess::ExitStatus status) {
+            bool isRunning = false;
+            if (status == QProcess::NormalExit && exitCode == 0) {
+                // parse {"items":[ { "status":{ "containerStatuses":[…] } }, … ]}
+                auto doc = QJsonDocument::fromJson(proc->readAllStandardOutput());
+                if (doc.isObject()) {
+                    QJsonArray items = doc.object().value("items").toArray();
+                    for (auto podVal : items) {
+                        auto podObj = podVal.toObject();
+                        auto st     = podObj.value("status").toObject();
+                        auto csArr  = st.value("containerStatuses").toArray();
+                        for (auto csVal : csArr) {
+                            auto cs = csVal.toObject();
+                            if (cs.value("ready").toBool(false)) {
+                                isRunning = true;
+                                break;
+                            }
+                        }
+                        if (isRunning) break;
+                    }
+                }
+            }
+            // report it:
+            updateServicesRunningSts(app.id, isRunning, i);
+            proc->deleteLater();
+            qDebug() << "[checkRunningAppSts] isRunning" << isRunning;
+
+            // count down, and when zero we’re free to start another round
+            if (--m_pendingChecks == 0) {
+                qDebug() << "[checkRunningAppSts] all"
+                         << installedVappsList.size()
+                         << "checks done.";
+            }
+        });
+
+        // fire & forget
+        proc->start();
+    }
 }

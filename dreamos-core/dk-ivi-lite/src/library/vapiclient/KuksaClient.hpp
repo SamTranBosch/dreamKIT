@@ -1,105 +1,186 @@
 #ifndef KUKSA_CLIENT_HPP
 #define KUKSA_CLIENT_HPP
 
-#include <string>
-#include <vector>
-#include <memory>
+#include <cstdint>
+#include <fstream>
 #include <functional>
+#include <iostream>
+#include <limits>
+#include <memory>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
+
 
 namespace KuksaClient {
 
-// A plain configuration structure.
+//------------------------------------------------------------------------------
+// Configuration structure declaration
+//------------------------------------------------------------------------------
 struct Config {
-    std::string serverURI;
-    bool debug = false;
-    std::vector<std::string> signalPaths;
+  std::string serverURI;
+  bool debug = false;
+  std::vector<std::string> signalPaths;
 };
 
-// A lightweight JSON-based configuration parser.
-// (Users of this API do not see any gRPC/Proto dependencies.)
-class ConfigParser {
-public:
-    // Parse the JSON config file specified by filename.
-    // Returns true if parsing succeeds, false otherwise.
-    static bool parse(const std::string &filename, Config &config);
+//------------------------------------------------------------------------------
+// Local enumeration for field types (for set operations)
+//------------------------------------------------------------------------------
+enum FieldType {
+  FT_VALUE = 1,           // For setting the “current” value
+  FT_ACTUATOR_TARGET = 2  // For setting the “target” actuator value
 };
 
-// Public API for the DataBroker client interface.
-// All gRPC/Proto details are hidden in the implementation.
-class DataBrokerClient {
+//------------------------------------------------------------------------------
+// Local enumeration for get views
+//------------------------------------------------------------------------------
+enum GetView {
+  GV_CURRENT = 0,
+  GV_TARGET = 1,
+  GV_ALL = 2
+};
+
+//------------------------------------------------------------------------------
+// KuksaClient Class Declaration
+// 
+// This class hides all gRPC/Proto details behind a private implementation (pImpl).
+// No gRPC or proto types appear anywhere in this header.
+//------------------------------------------------------------------------------
+class KuksaClient {
 public:
-    DataBrokerClient();
-    ~DataBrokerClient();
+  // Constructors & Destructor
+  explicit KuksaClient(const Config &config);
+  explicit KuksaClient(const std::string &configFile);
+  ~KuksaClient();
 
-    // Establish a connection to the server.
-    void Connect(const std::string &serverURI);
+  //--------------------------------------------------------------------------
+  // Public API: Connection & Data Operations
+  //--------------------------------------------------------------------------
 
-    // Get the current value for the specified entry.
-    bool GetTargetValue(const std::string &entryPath, std::string &singalValue);
-    bool GetCurrentValue(const std::string &entryPath, std::string &singalValue);
+  // Establish connection to the broker server.
+  void connect();
 
-    // Send a streamed update (for example, update a value).
-    void StreamedUpdate(const std::string &entryPath, float newValue);
+  // Get the current value for an entry as a string.
+  std::string getCurrentValue(const std::string &entryPath);
 
-    // Define the callback type.
-    // The callback receives two strings: the path and the updated value.
-    using Callback = std::function<void(const std::string&, const std::string&)>;
-    // Subscribe to changes/updates for the given entry.
-    void Subscribe(const std::string &entryPath, Callback userCallback);
-    void SubscribeTarget(const std::string &entryPath, Callback userCallback);
+  // Get the target (actuator) value for an entry as a string.
+  std::string getTargetValue(const std::string &entryPath);
 
-    // Retrieve basic server information.
-    void GetServerInfo();
+  //--------------------------------------------------------------------------
+  // Conversion API: Retrieve and convert values.
+  // The templated functions call the string‐based getter and then perform a conversion.
+  //--------------------------------------------------------------------------
+  template <typename T>
+  bool getCurrentValueAs(const std::string &entryPath, T &out) {
+    std::string strVal = getCurrentValue(entryPath);
+    return convertString(strVal, out);
+  }
 
-    // Set the value of an entry.
-    // We provide several overloads (non-templated) to avoid "exposing" template code.
-    void SetCurrentValue(const std::string &entryPath, float newValue);
-    void SetCurrentValue(const std::string &entryPath, double newValue);
-    void SetCurrentValue(const std::string &entryPath, uint8_t newValue);
-    void SetCurrentValue(const std::string &entryPath, int8_t newValue);
-    void SetCurrentValue(const std::string &entryPath, uint32_t newValue);
-    void SetCurrentValue(const std::string &entryPath, int32_t newValue);
-    void SetCurrentValue(const std::string &entryPath, int64_t newValue);
-    void SetCurrentValue(const std::string &entryPath, uint64_t newValue);
-    void SetCurrentValue(const std::string &entryPath, bool newValue);
-    void SetCurrentValue(const std::string &entryPath, const std::string &newValue);
-    
-    void SetTargetValue(const std::string &entryPath, float newValue);
-    void SetTargetValue(const std::string &entryPath, double newValue);
-    void SetTargetValue(const std::string &entryPath, uint8_t newValue);
-    void SetTargetValue(const std::string &entryPath, int8_t newValue);
-    void SetTargetValue(const std::string &entryPath, uint32_t newValue);
-    void SetTargetValue(const std::string &entryPath, int32_t newValue);
-    void SetTargetValue(const std::string &entryPath, uint64_t newValue);
-    void SetTargetValue(const std::string &entryPath, int64_t newValue);
-    void SetTargetValue(const std::string &entryPath, bool newValue);
-    void SetTargetValue(const std::string &entryPath, const std::string &newValue);
+  template <typename T>
+  bool getTargetValueAs(const std::string &entryPath, T &out) {
+    std::string strVal = getTargetValue(entryPath);
+    return convertString(strVal, out);
+  }
+
+  // Stream an update to an entry.
+  void streamUpdate(const std::string &entryPath, float newValue);
+
+  //--------------------------------------------------------------------------
+  // Set Value API: Set current (or target) value for an entry.
+  //--------------------------------------------------------------------------
+  template <typename T>
+  void setCurrentValue(const std::string &entryPath, const T &newValue) {
+    setValueInternal(entryPath, newValue, FT_VALUE);
+  }
+
+  template <typename T>
+  void setTargetValue(const std::string &entryPath, const T &newValue) {
+    setValueInternal(entryPath, newValue, FT_ACTUATOR_TARGET);
+  }
+
+  //--------------------------------------------------------------------------
+  // Subscription APIs
+  //--------------------------------------------------------------------------
+  
+  void subscribeTargetValue(const std::string &entryPath,
+                  std::function<void(const std::string &, const std::string &, const int &)> userCallback);
+
+  void subscribeCurrentValue(const std::string &entryPath,
+                  std::function<void(const std::string &, const std::string &, const int &)> userCallback);
+  // Subscribe to updates for a specific entry.
+  // The provided callback is invoked with (entryPath, updateValue) for every update.
+  void subscribe(const std::string &entryPath,
+                  std::function<void(const std::string &, const std::string &, const int &)> userCallback, int field);
+
+  // Subscribe to all signal paths (from our configuration).
+  // Each subscription runs in its own thread.
+  void subscribeAll(std::function<void(const std::string &, const std::string &, const int &)> userCallback);
+
+  // Wait for all subscription threads to finish.
+  void joinAllSubscriptions();
+
+  // Detach all subscription threads.
+  void detachAllSubscriptions();
+
+  // Retrieve broker server info.
+  void getServerInfo();
+
+  //--------------------------------------------------------------------------
+  // Static Helper: Parse a configuration file into a Config structure.
+  //--------------------------------------------------------------------------
+  static bool parseConfig(const std::string &filename, Config &config);
 
 private:
-    // The implementations of the above functions are hidden.
-    class Impl;
-    std::unique_ptr<Impl> pImpl;
-};
+  //--------------------------------------------------------------------------
+  // Private Helper Functions
+  //--------------------------------------------------------------------------
+  // Common function used by getCurrentValue() and getTargetValue().
+  // It uses our local GetView enumeration.
+  std::string getValue(const std::string &entryPath, GetView view, bool target);
 
-// The SubscriptionManager starts subscriptions in separate threads.
-class SubscriptionManager {
-public:
-    SubscriptionManager(DataBrokerClient &client, const std::vector<std::string> &paths);
-    ~SubscriptionManager();
+  // Templated helper used to set values.
+  // Its implementation is provided in the CPP file.
+  template <typename T>
+  void setValueInternal(const std::string &entryPath, const T &newValue, int field) {
+    setValueInternalImpl(entryPath, newValue, field);
+  }
 
-    // Start one subscription thread per signal path.
-    void startSubscriptions(std::function<void(const std::string&, const std::string&)> userCallback);
-    void startTargetSubscriptions(std::function<void(const std::string&, const std::string&)> userCallback);
+  // Non-templated implementation helper (definition is in the CPP file).
+  template <typename T>
+  void setValueInternalImpl(const std::string &entryPath, const T &newValue, int field);
 
-    // Optionally join all threads.
-    void joinAll();
+  //--------------------------------------------------------------------------
+  // Private Helper: Conversion from string to a standard type.
+  // Returns true if conversion succeeded.
+  //--------------------------------------------------------------------------
+  template <typename T>
+  static bool convertString(const std::string &str, T &out) {
+    std::istringstream iss(str);
+    iss >> out;
+    return !iss.fail() && iss.eof();
+  }
+  static bool convertString(const std::string &str, bool &out);
+  static bool convertString(const std::string &str, uint8_t &out);
+  static bool convertString(const std::string &str, uint16_t &out);
+  static bool convertString(const std::string &str, uint32_t &out);
 
-    // Alternatively, detach all subscription threads.
-    void detachAll();
+  //--------------------------------------------------------------------------
+  // Private Members
+  //--------------------------------------------------------------------------
+  // All gRPC/Proto-related members are hidden in the implementation.
+  struct Impl;
+  std::unique_ptr<Impl> pImpl;
 
-private:
-    class Impl;
-    std::unique_ptr<Impl> pImpl;
+  // We also store configuration items directly.
+  std::string serverURI_;
+  bool debug_{false};
+  Config config_;
+  std::vector<std::string> signalPaths_;
+
+  // Threads dedicated to subscription updates.
+  std::vector<std::thread> subscriptionThreads_;
 };
 
 } // namespace KuksaClient

@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "../resource/customwidgets"
-import ServicesAsync 1.0
+import VsersAsync 1.0
 
 Rectangle {
     id: installedservices_page
@@ -21,7 +21,7 @@ Rectangle {
 
     Component.onCompleted: {
         appListModel.clear()
-        appAsync.initInstalledServicesFromDB()
+        appAsync.initInstalledFromDB()
     }
 
     function findChildByObjectName(parent, objectName) {
@@ -36,7 +36,7 @@ Rectangle {
         return null;
     }
 
-    ServicesAsync {
+    VsersAsync {
         id: appAsync
 
         onClearServicesListView: {
@@ -85,6 +85,71 @@ Rectangle {
             var foundChild = findChildByObjectName(chkItem, appId);
             if (foundChild) {
                 foundChild.checked = isStarted;
+            }
+        }
+
+        onNewLogMessage: (logLine) => {
+            logViewer.logContent += logLine;
+        }
+    }
+
+    Dialog {
+        id: logViewer
+        width: Math.min(parent.width * 0.8, 1000)
+        height: Math.min(parent.height * 0.8, 800)
+        anchors.centerIn: parent
+        modal: true
+        property string logContent: ""
+
+        onOpened: {
+            appAsync.streamLogs(appListView.currentIndex)
+        }
+        onClosed: {
+            appAsync.stopLogStream()
+            logContent = ""
+        }
+
+        background: Rectangle {
+            color: "#1A1A1A"
+            radius: 16
+            border.color: "#00D4AA"
+            border.width: 1
+        }
+
+        header: Rectangle {
+            width: parent.width
+            height: 50
+            color: "#2A2A2A"
+            Text {
+                text: "Logs for " + appListModel.get(appListView.currentIndex).name
+                anchors.centerIn: parent
+                color: "#FFFFFF"
+                font.pixelSize: 18
+            }
+        }
+
+        contentItem: Flickable {
+            clip: true
+            contentWidth: width
+            contentHeight: logArea.height
+
+            TextArea {
+                id: logArea
+                width: parent.width
+                readOnly: true
+                text: logViewer.logContent
+                color: "#E0E0E0"
+                background: Rectangle {
+                    color: "#101010"
+                }
+            }
+        }
+
+        footer: DialogButtonBox {
+            background: Rectangle { color: "#2A2A2A" }
+            Button {
+                text: "Close"
+                onClicked: logViewer.close()
             }
         }
     }
@@ -653,7 +718,7 @@ Rectangle {
                             spacing: 12
                             anchors.verticalCenter: parent.verticalCenter
 
-                            // Edit button - modern design without image
+                            // Edit button - modern design without image\n                            Rectangle {\n                                width: 40\n                                height: 40\n                                radius: 20\n                                color: \"#2A2A2A\"\n                                border.color: \"#404040\"\n                                border.width: 1\n\n                                // Edit icon using text/symbols\n                                Text {\n                                    anchors.centerIn: parent\n                                    text: \"\uD83D\uDCCB\"\n                                    color: \"#B0B0B0\"\n                                    font.pixelSize: 16\n                                    font.family: \"Segoe UI\"\n                                }\n\n                                MouseArea {\n                                    anchors.fill: parent\n                                    hoverEnabled: true\n                                    cursorShape: Qt.PointingHandCursor\n                                    onEntered: {\n                                        parent.color = \"#353535\"\n                                        parent.border.color = \"#00D4AA40\"\n                                    }\n                                    onExited: {\n                                        parent.color = \"#2A2A2A\"\n                                        parent.border.color = \"#404040\"\n                                    }\n                                    onClicked: {\n                                        appListView.currentIndex = index\n                                        logViewer.open()\n                                    }\n                                }\n\n                                Behavior on color { ColorAnimation { duration: 200 } }\n                                Behavior on border.color { ColorAnimation { duration: 200 } }\n                            }\n\n                            // Edit button - modern design without image
                             Rectangle {
                                 width: 40
                                 height: 40

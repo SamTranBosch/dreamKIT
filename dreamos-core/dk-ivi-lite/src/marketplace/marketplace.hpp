@@ -7,18 +7,8 @@
 
 // bring in your existing fetch helpers:
 #include "fetching.hpp"
+#include "datamanager.hpp"
 
-struct AppInfo {
-    QString id;
-    QString name;
-    QString author;
-    double  rating;
-    int     downloads;
-    QString iconUrl;
-    QString folderName;
-    QString packageLink;
-    bool    isInstalled;
-};
 
 class AppListModel : public QAbstractListModel {
     Q_OBJECT
@@ -97,6 +87,7 @@ class MarketplaceViewModel : public QObject {
     // called by QML
     void search(const QString& term);
     void setCurrentCategory(int idx);   // setter for Q_PROPERTY
+    void appSelected(int idx);
     void prepareInstall(int idx);
     void confirmInstall();
     void cancelInstall();
@@ -112,6 +103,11 @@ class MarketplaceViewModel : public QObject {
     AppListModel*      m_apps         = nullptr;
     CategoryListModel* m_cats         = nullptr;
     QProcess*          m_installer    = nullptr;
+    QList<AppInfo>     m_lastApps;
+
+    QStringList        m_installCommands;     // queue of kubectl steps
+    int                m_installCmdIndex{0};  // current step index
+    void               runNextInstallCommand();
 
     int     m_currentCategory = 0;
     bool    m_isInstalling    = false;

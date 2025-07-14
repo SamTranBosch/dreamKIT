@@ -21,7 +21,7 @@ Rectangle {
 
     Component.onCompleted: {
         appListModel.clear()
-        appAsync.initInstalledVappsFromDB()
+        appAsync.initInstalledFromDB()
     }
 
     function findChildByObjectName(parent, objectName) {

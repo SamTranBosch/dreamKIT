@@ -1,0 +1,44 @@
+
+# Derived from the k3s install.sh's create_systemd_service_file() function
+[Unit]
+Description=Lightweight Kubernetes
+Documentation=https://k3s.io
+Requires=containerd.service
+After=containerd.service
+After=network-online.target
+Wants=network-online.target
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+Type=notify
+EnvironmentFile=-/etc/default/%N
+EnvironmentFile=-/etc/sysconfig/%N
+EnvironmentFile=-/etc/systemd/system/k3s.service.env
+KillMode=process
+Delegate=yes
+# Having non-zero Limit*s causes performance problems due to accounting overhead
+# in the kernel. We recommend using cgroups to do container-local accounting.
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+Restart=always
+RestartSec=5s
+ExecStartPre=/bin/sh -xc '! systemctl is-enabled --quiet nm-cloud-setup.service'
+ExecStartPre=-/sbin/modprobe br_netfilter
+ExecStartPre=-/sbin/modprobe overlay
+# ExecStart=/usr/local/bin/k3s server
+ExecStart=/usr/local/bin/k3s agent \
+  --server https://192.168.56.2:6443 \
+  --token K10ae7ccd555cfbf04579e837023af99ae59d6591b6f45ecefab31ea4874ec12a3a::server:1893c941d68385def6108bd848da5129 \
+  --node-ip 192.168.56.49 \
+  --flannel-iface eth0 \
+  --kubelet-arg="allowed-unsafe-sysctls=net.ipv4.ip_forward"
+
+# Avoid any delay due to this service when the system is rebooting or shutting
+# down by using the k3s-killall.sh script to kill all of the running k3s
+# services and containers
+ExecStopPost=/bin/sh -c "if systemctl is-system-running | grep -i                            'stopping'; then /usr/local/bin/k3s-killall.sh; fi"
