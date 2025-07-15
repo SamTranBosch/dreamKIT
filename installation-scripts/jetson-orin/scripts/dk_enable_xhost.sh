@@ -16,7 +16,8 @@ echo "Creating systemd service at $SERVICE_PATH"
 cat <<EOF > "$SERVICE_PATH"
 [Unit]
 Description=Allow local connections to X server
-After=display-manager.service graphical.target
+After=display-manager.service
+PartOf=graphical.target
 
 [Service]
 Type=oneshot
