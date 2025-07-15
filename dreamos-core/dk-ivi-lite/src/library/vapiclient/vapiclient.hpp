@@ -24,6 +24,17 @@
 // These inline constants define the available keys for the vehicle Software Update API.
 // Using these constants throughout your code enables code completion and minimizes errors.
 //------------------------------------------------------------------------------
+#if 0
+namespace VehicleAPI {
+  inline constexpr const char* V_Bo_Lights_Beam_Low_IsOn               = "Vehicle.Body.Lights.Beam.Low.IsOn";
+  inline constexpr const char* V_Bo_Lights_Beam_High_IsOn              = "Vehicle.Body.Lights.Beam.High.IsOn";
+  inline constexpr const char* V_Bo_Lights_Brake_IsOn                  = "Vehicle.Body.Lights.Brake.IsActive";
+  inline constexpr const char* V_Bo_Lights_Hazard_IsSignaling          = "Vehicle.Body.Lights.Hazard.IsSignaling";
+  inline constexpr const char* V_Ca_HVAC_Station_R1_Driver_FanSpeed    = "Vehicle.Cabin.HVAC.Station.Row1.Passenger.FanSpeed";
+  inline constexpr const char* V_Ca_HVAC_Station_R1_Passenger_FanSpeed = "Vehicle.Cabin.HVAC.Station.Row1.Driver.FanSpeed";
+  inline constexpr const char* V_Ca_Seat_R1_DriverSide_Position        = "Vehicle.Cabin.Seat.Row1.DriverSide.Position";
+}
+#else
 namespace VehicleAPI {
     inline constexpr const char* V_Bo_Lights_Beam_Low_IsOn               = "Vehicle.Body.Lights.IsLowBeamOn";
     inline constexpr const char* V_Bo_Lights_Beam_High_IsOn              = "Vehicle.Body.Lights.IsHighBeamOn";
@@ -33,6 +44,7 @@ namespace VehicleAPI {
     inline constexpr const char* V_Ca_HVAC_Station_R1_Passenger_FanSpeed = "Vehicle.Cabin.HVAC.Station.Row1.Right.FanSpeed";
     inline constexpr const char* V_Ca_Seat_R1_DriverSide_Position        = "Vehicle.Cabin.Seat.Row1.Pos1.Position";
 }
+#endif
 
 //----------------------------------------------------------------------
 // callback signature used by KuksaClient::subscribe*()

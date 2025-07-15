@@ -406,19 +406,24 @@ void MarketplaceViewModel::confirmInstall()
 
     bool remote = (node != QHostInfo::localHostName());
     qDebug() << "[Installer] remote:" << remote;
-    QString yaml  = remote
-        ? QString("%1/%2_pull.yaml").arg(baseDir, app.id)
-        : QString("%1/%2_mirror.yaml").arg(baseDir, app.id);
-    QString jobName = remote
-        ? QString("pull-%1").arg(lcName)
-        : QString("mirror-%1").arg(lcName);
 
+    QString yaml_pull       = QString("%1/%2_pull.yaml").arg(baseDir, app.id);
+    QString yaml_mirror     = QString("%1/%2_mirror.yaml").arg(baseDir, app.id);
+    QString jobName_pull    = QString("pull-%1").arg(lcName);
+    QString jobName_mirror  = QString("mirror-%1").arg(lcName);
+    
     // build our three‐step queue
     m_installCommands.clear();
-    m_installCommands << QString("kubectl apply -f %1").arg(yaml)
+    m_installCommands << QString("kubectl apply -f %1").arg(yaml_pull)
                       << QString("kubectl wait --for=condition=complete job/%1 --timeout=300s")
-                           .arg(jobName)
-                      << QString("kubectl delete job %1").arg(jobName);
+                           .arg(jobName_pull)
+                      << QString("kubectl delete job %1").arg(jobName_pull);
+    if(remote){
+        m_installCommands << QString("kubectl apply -f %1").arg(yaml_mirror)
+                          << QString("kubectl wait --for=condition=complete job/%1 --timeout=300s")
+                               .arg(jobName_mirror)
+                          << QString("kubectl delete job %1").arg(jobName_mirror);
+    }
     m_installCmdIndex = 0;
 
     // show busy spinner in QML
