@@ -269,7 +269,7 @@ void ControlsAsync::qml_setApi_lightCtr_Hazard(bool sts)
 
 void ControlsAsync::qml_setApi_seat_driverSide_position(int position)
 {
-    if (position < 1 || position > 3) {
+    if (position < 1 || position > 10) {
         qWarning() << "Invalid seat position:" << position;
         return;
     }
