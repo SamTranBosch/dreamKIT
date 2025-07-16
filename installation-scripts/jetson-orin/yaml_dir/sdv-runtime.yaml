@@ -13,7 +13,7 @@ spec:
         app: sdv-runtime
     spec:
       nodeSelector:
-        kubernetes.io/hostname: ubuntu22 # <--- Name of your agent node
+        kubernetes.io/hostname: xip # <--- Name of your agent node
       hostNetwork: true              # equivalent to --network host
       containers:
       - name: sdv-runtime

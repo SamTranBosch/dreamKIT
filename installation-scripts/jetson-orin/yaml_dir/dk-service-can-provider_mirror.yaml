@@ -8,7 +8,7 @@ spec:
       hostNetwork: true
       # force this Pod onto ECU-A (your Internet-capable node)
       nodeSelector:
-        kubernetes.io/hostname: rta-vrte-sk  
+        kubernetes.io/hostname: xip  
       restartPolicy: Never
       containers:
       - name: mirror
