@@ -139,3 +139,10 @@ URL:  https://kit.digitalauto.tech
 [2025-06-04 02:07:41] [connect] WebSocket Connection 168.63.44.238:443 v-2 "WebSocket++/0.8.2" /socket.io/?EIO=4&transport=websocket&t=1749002860 101
 get_dreamkit_code 92 serialNo:  "7de10f4b"
 ```
+
+### Debug
+
+```shell
+
+curl -v http://192.168.56.48:5000/v2/_catalog
+```

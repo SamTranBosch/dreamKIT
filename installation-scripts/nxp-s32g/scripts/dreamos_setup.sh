@@ -19,7 +19,7 @@ insmod /home/root/.dk/nxp-s32g/library/can-isotp-s32g-ewaol.ko
 ifconfig eth0 192.168.56.49
 
 # Configure K3S - default gateway
-ip route add default via 192.168.56.2 dev eth0
+ip route add default via 192.168.56.48 dev eth0
 
 # Configure K3S - CA
 timedatectl set-ntp true

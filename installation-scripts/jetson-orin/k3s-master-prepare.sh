@@ -94,6 +94,7 @@ ExecStartPre=-/sbin/modprobe overlay
 ExecStart=/usr/local/bin/k3s agent \\
   --server https://${SERVER_IP}:6443 \\
   --token ${NODE_TOKEN} \\
+  --node-name=vip \\
   --node-ip ${NODE_IP} \\
   --flannel-iface ${NODE_NET_IF} \\
   --kubelet-arg="allowed-unsafe-sysctls=net.ipv4.ip_forward"
@@ -107,18 +108,18 @@ EOF
 
 
 # 4) Configure containerd as a Mirror
-# With that in place, any Pod spec referring to ghcr.io/... will first try your local mirror at 192.168.56.2:5000, then fall back to the real ghcr.io if the mirror is missing.
+# With that in place, any Pod spec referring to ghcr.io/... will first try your local mirror at 192.168.56.48:5000, then fall back to the real ghcr.io if the mirror is missing.
 # You still must push the image to your local registry once (same docker pull / tag / push steps above), but future pulls even using the original ghcr.io/... name will come from your local mirror.
 cat >../nxp-s32g/scripts/registries.yaml <<EOF
 mirrors:
   "docker.io":
     endpoint:
-      - "http://192.168.56.2:5000"
+      - "http://192.168.56.48:5000"
   "ghcr.io":
     endpoint:
-      - "http://192.168.56.2:5000"
+      - "http://192.168.56.48:5000"
 configs:
-  "192.168.56.2:5000":
+  "192.168.56.48:5000":
     tls:
       insecure_skip_verify: true
 EOF

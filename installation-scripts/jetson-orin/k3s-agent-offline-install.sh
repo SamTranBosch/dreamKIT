@@ -14,3 +14,6 @@ export KUBECONFIG=~/.kube/config
 mkdir ~/.kube 2> /dev/null
 sudo k3s kubectl config view --raw > "$KUBECONFIG"
 chmod 600 "$KUBECONFIG"
+
+# Delete the node for new one connected
+sudo kubectl delete node vip
