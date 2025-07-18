@@ -311,7 +311,7 @@ main() {
     DOCKER_SHARE_PARAM="-v /var/run/docker.sock:/var/run/docker.sock -v /usr/bin/docker:/usr/bin/docker"
     DOCKER_AUDIO_PARAM="--device /dev/snd --group-add audio -e PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native -v ${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native -v $HOME_DIR/.config/pulse/cookie:/root/.config/pulse/cookie"
     LOG_LIMIT_PARAM="--log-opt max-size=10m --log-opt max-file=3"
-    DOCKER_HUB_NAMESPACE="ghcr.io/samtranbosch"
+    DOCKER_HUB_NAMESPACE="ghcr.io/eclipse-autowrx"
     
     show_success "Runtime configuration completed"
     
@@ -395,6 +395,8 @@ main() {
         fi
     done
     
+    DOCKER_HUB_NAMESPACE="ghcr.io/samtranbosch"
+
     if [[ "$dk_ivi_value" == "true" ]]; then
         show_info "Installing IVI interface..."
         run_with_feedback "sudo $CURRENT_DIR/scripts/dk_enable_xhost.sh" "X11 forwarding enabled" "X11 setup failed"
@@ -403,10 +405,10 @@ main() {
         
         if [ -f "/etc/nv_tegra_release" ]; then
             show_info "NVIDIA Jetson board detected - optimizing for hardware"
-            run_with_feedback "docker stop dk_ivi 2>/dev/null || true; docker rm dk_ivi 2>/dev/null || true; docker run -d -it --name dk_ivi --network host -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=$DISPLAY -e XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR -e QT_QUICK_BACKEND=software --restart unless-stopped $LOG_LIMIT_PARAM $DOCKER_SHARE_PARAM -v $HOME_DIR/.dk:/app/.dk -e DKCODE=dreamKIT -e DK_USER=$DK_USER -e DK_VIP=$dk_vip_demo -e DK_DOCKER_HUB_NAMESPACE=$DOCKER_HUB_NAMESPACE -e DK_ARCH=$ARCH -e DK_CONTAINER_ROOT=\"/app/.dk/\" $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI started (NVIDIA optimized)" "Failed to start IVI"
+            run_with_feedback "docker stop dk_ivi 2>/dev/null || true; docker rm dk_ivi 2>/dev/null || true; docker run -d -it --name dk_ivi --network host -v /usr/bin/docker:/usr/bin/docker -v /usr/local/bin/kubectl:/usr/local/bin/kubectl:ro -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=$DISPLAY -e XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR -e QT_QUICK_BACKEND=software --restart unless-stopped $LOG_LIMIT_PARAM $DOCKER_SHARE_PARAM -v $HOME_DIR/.dk:/app/.dk -e DKCODE=dreamKIT -e DK_USER=$DK_USER -e DK_VIP=$dk_vip_demo -e DK_DOCKER_HUB_NAMESPACE=$DOCKER_HUB_NAMESPACE -e DK_ARCH=$ARCH -e DK_CONTAINER_ROOT=\"/app/.dk/\" $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI started (NVIDIA optimized)" "Failed to start IVI"
         else
             show_info "Standard hardware detected - using generic configuration"
-            run_with_feedback "docker stop dk_ivi 2>/dev/null || true; docker rm dk_ivi 2>/dev/null || true; docker run -d -it --name dk_ivi --network host -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=$DISPLAY -e XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR --device /dev/dri:/dev/dri --restart unless-stopped $LOG_LIMIT_PARAM $DOCKER_SHARE_PARAM -v $HOME_DIR/.dk:/app/.dk -e DKCODE=dreamKIT -e DK_USER=$DK_USER -e DK_VIP=$dk_vip_demo -e DK_DOCKER_HUB_NAMESPACE=$DOCKER_HUB_NAMESPACE -e DK_ARCH=$ARCH -e DK_CONTAINER_ROOT=\"/app/.dk/\" $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI started (standard)" "Failed to start IVI"
+            run_with_feedback "docker stop dk_ivi 2>/dev/null || true; docker rm dk_ivi 2>/dev/null || true; docker run -d -it --name dk_ivi --network host -v /usr/bin/docker:/usr/bin/docker -v /usr/local/bin/kubectl:/usr/local/bin/kubectl:ro -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=$DISPLAY -e XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR --device /dev/dri:/dev/dri --restart unless-stopped $LOG_LIMIT_PARAM $DOCKER_SHARE_PARAM -v $HOME_DIR/.dk:/app/.dk -e DKCODE=dreamKIT -e DK_USER=$DK_USER -e DK_VIP=$dk_vip_demo -e DK_DOCKER_HUB_NAMESPACE=$DOCKER_HUB_NAMESPACE -e DK_ARCH=$ARCH -e DK_CONTAINER_ROOT=\"/app/.dk/\" $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI started (standard)" "Failed to start IVI"
         fi
     else
         show_info "IVI installation skipped"
@@ -423,10 +425,10 @@ main() {
             
             if [ -f "/etc/nv_tegra_release" ]; then
                 show_info "NVIDIA Jetson board detected - optimizing for hardware"
-                run_with_feedback "docker stop dk_ivi 2>/dev/null || true; docker rm dk_ivi 2>/dev/null || true; docker run -d -it --name dk_ivi --network host -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=$DISPLAY -e XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR -e QT_QUICK_BACKEND=software --restart unless-stopped $LOG_LIMIT_PARAM $DOCKER_SHARE_PARAM -v $HOME_DIR/.dk:/app/.dk -e DKCODE=dreamKIT -e DK_USER=$DK_USER -e DK_VIP=$dk_vip_demo -e DK_DOCKER_HUB_NAMESPACE=$DOCKER_HUB_NAMESPACE -e DK_ARCH=$ARCH -e DK_CONTAINER_ROOT=\"/app/.dk/\" $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI started (NVIDIA optimized)" "Failed to start IVI"
+                run_with_feedback "docker stop dk_ivi 2>/dev/null || true; docker rm dk_ivi 2>/dev/null || true; docker run -d -it --name dk_ivi --network host -v /usr/bin/docker:/usr/bin/docker -v /usr/local/bin/kubectl:/usr/local/bin/kubectl:ro -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=$DISPLAY -e XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR -e QT_QUICK_BACKEND=software --restart unless-stopped $LOG_LIMIT_PARAM $DOCKER_SHARE_PARAM -v $HOME_DIR/.dk:/app/.dk -e DKCODE=dreamKIT -e DK_USER=$DK_USER -e DK_VIP=$dk_vip_demo -e DK_DOCKER_HUB_NAMESPACE=$DOCKER_HUB_NAMESPACE -e DK_ARCH=$ARCH -e DK_CONTAINER_ROOT=\"/app/.dk/\" $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI started (NVIDIA optimized)" "Failed to start IVI"
             else
                 show_info "Standard hardware detected - using generic configuration"
-                run_with_feedback "docker stop dk_ivi 2>/dev/null || true; docker rm dk_ivi 2>/dev/null || true; docker run -d -it --name dk_ivi --network host -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=$DISPLAY -e XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR --device /dev/dri:/dev/dri --restart unless-stopped $LOG_LIMIT_PARAM $DOCKER_SHARE_PARAM -v $HOME_DIR/.dk:/app/.dk -e DKCODE=dreamKIT -e DK_USER=$DK_USER -e DK_VIP=$dk_vip_demo -e DK_DOCKER_HUB_NAMESPACE=$DOCKER_HUB_NAMESPACE -e DK_ARCH=$ARCH -e DK_CONTAINER_ROOT=\"/app/.dk/\" $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI started (standard)" "Failed to start IVI"
+                run_with_feedback "docker stop dk_ivi 2>/dev/null || true; docker rm dk_ivi 2>/dev/null || true; docker run -d -it --name dk_ivi --network host -v /usr/bin/docker:/usr/bin/docker -v /usr/local/bin/kubectl:/usr/local/bin/kubectl:ro -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=$DISPLAY -e XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR --device /dev/dri:/dev/dri --restart unless-stopped $LOG_LIMIT_PARAM $DOCKER_SHARE_PARAM -v $HOME_DIR/.dk:/app/.dk -e DKCODE=dreamKIT -e DK_USER=$DK_USER -e DK_VIP=$dk_vip_demo -e DK_DOCKER_HUB_NAMESPACE=$DOCKER_HUB_NAMESPACE -e DK_ARCH=$ARCH -e DK_CONTAINER_ROOT=\"/app/.dk/\" $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI started (standard)" "Failed to start IVI"
             fi
             # Update the environment variable to reflect the installation
             dk_ivi_value="true"
