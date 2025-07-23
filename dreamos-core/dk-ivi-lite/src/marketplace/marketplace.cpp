@@ -387,24 +387,12 @@ void MarketplaceViewModel::confirmInstall()
 
     // resolve node same as before...
     if (target.isEmpty() || target == "xip") {
-        node = QHostInfo::localHostName();
+        node = "xip";
     } else {
-        node = QProcessEnvironment::systemEnvironment()
-                   .value("K3S_NODE_NAME").trimmed();
-        if (node.isEmpty()) {
-            QProcess p;
-            p.start("sh", {"-c",
-                "kubectl get nodes "
-                "--selector='!node-role.kubernetes.io/master' "
-                "-o name|cut -d/ -f2|head -n1"});
-            p.waitForFinished(2000);
-            node = QString(p.readAllStandardOutput()).trimmed();
-        }
-        if (node.isEmpty())
-            node = target;
+        node = "vip";
     }
 
-    bool remote = (node != QHostInfo::localHostName());
+    bool remote = (node != "xip");
     qDebug() << "[Installer] remote:" << remote;
 
     QString yaml_pull       = QString("%1/%2_pull.yaml").arg(baseDir, app.id);

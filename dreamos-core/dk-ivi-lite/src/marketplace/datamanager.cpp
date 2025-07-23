@@ -161,38 +161,15 @@ bool DataManager::saveAppConfig(const AppInfo &app,
     QString target = app.dashboardConfig.Target;
     QString image  = app.dashboardConfig.DockerImageURL;
     QString node;
-    QString nodeXIP = QHostInfo::localHostName();
+    QString nodeXIP = "xip";
+    QString nodeVIP = "vip";
     bool    isRemoteNode = true;
 
-    if (target.isEmpty() || target == QLatin1String("xip")) {
+    if (target.isEmpty() || target == nodeXIP) {
         node = nodeXIP;
         isRemoteNode = false;
-    }
-    else {
-        // 3a) env-override
-        auto env = QProcessEnvironment::systemEnvironment();
-        node = env.value("K3S_NODE_NAME").trimmed();
-
-        // 3b) try kubectl but skip master/control-plane
-        if (node.isEmpty()) {
-            QProcess proc;
-            // select only non-master nodes
-            QString cmd =
-                "kubectl get nodes "
-                "--selector='!node-role.kubernetes.io/master' "
-                "-o name | cut -d/ -f2 | head -n1";
-            proc.start("sh", QStringList{"-c", cmd});
-            if (proc.waitForFinished(3000)) {
-                QString out = QString::fromUtf8(
-                                proc.readAllStandardOutput()).trimmed();
-                if (!out.isEmpty())
-                    node = out;
-            }
-        }
-
-        // 3c) fallback to original target
-        if (node.isEmpty())
-            node = target;
+    } else {
+        node = nodeVIP;
     }
 
     // Lower-case name
@@ -282,56 +259,26 @@ ${args}
         mirrorImage = QString("localhost:5000/%1").arg(rest);
     }
 
-    // 5) emit the “pull” Job YAML
-    //    this will pull the image, then exit immediately (command "true")
-    static const char *pullTpl = R"(apiVersion: batch/v1
-kind: Job
-metadata:
-  name: pull-${name}
-spec:
-  template:
-    spec:
-      hostNetwork: true
-      nodeSelector:
-        kubernetes.io/hostname: ${node}
-      restartPolicy: Never
-      containers:
-      - name: pull
-        image: ${image}
-        command: ["true"]
-)";
-    QString pullYaml = QString(pullTpl)
-        .replace("${name}",  lcName)
-        .replace("${node}",  nodeXIP)
-        .replace("${image}", image);
-
-    const QString pullFn = dirPath + "/" + app.id + "_pull.yaml";
-    {
-        QFile f(pullFn);
-        if (f.open(QIODevice::WriteOnly)) {
-            QTextStream(&f) << pullYaml;
-            f.close();
-            qDebug() << "Wrote pull-job to" << pullFn;
-        } else {
-            qWarning() << "Cannot write" << pullFn;
-        }
-    }
-
-    // 6) if remote, also emit a skopeo‐based “mirror” Job
+    // 5) if remote, also emit a skopeo‐based “mirror” Job
     if (isRemoteNode) {
         static const char *mirrorTpl = R"(apiVersion: batch/v1
 kind: Job
 metadata:
-  name: mirror
+  name: pull-then-mirror
 spec:
+  backoffLimit: 1
   template:
     spec:
       hostNetwork: true
       nodeSelector:
         kubernetes.io/hostname: ${node}
       restartPolicy: Never
+      initContainers:
+      - name: pull-package
+        image: ${src}
+        command: ["true"]
       containers:
-      - name: mirror
+      - name: mirror-package
         image: quay.io/containers/skopeo:latest
         command: ["skopeo","copy"]
         args:
@@ -355,6 +302,41 @@ spec:
             qDebug() << "Wrote mirror-job to" << mirrorFn;
         } else {
             qWarning() << "Cannot write" << mirrorFn;
+        }
+    }
+
+    // 6) emit the “pull” Job YAML
+    //    this will pull the image, then exit immediately (command "true")
+    static const char *pullTpl = R"(apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pull-${name}
+spec:
+  template:
+    spec:
+      hostNetwork: true
+      nodeSelector:
+        kubernetes.io/hostname: ${node}
+      restartPolicy: Never
+      containers:
+      - name: pull
+        image: ${image}
+        command: ["true"]
+)";
+    QString pullYaml = QString(pullTpl)
+        .replace("${name}",  lcName)
+        .replace("${node}",  node)
+        .replace("${image}", image);
+
+    const QString pullFn = dirPath + "/" + app.id + "_pull.yaml";
+    {
+        QFile f(pullFn);
+        if (f.open(QIODevice::WriteOnly)) {
+            QTextStream(&f) << pullYaml;
+            f.close();
+            qDebug() << "Wrote pull-job to" << pullFn;
+        } else {
+            qWarning() << "Cannot write" << pullFn;
         }
     }
 
