@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: mirror-dk-service-once
+  name: mirror-k3s-rancher-mirrored-pause
 spec:
   template:
     spec:
@@ -11,7 +11,7 @@ spec:
         kubernetes.io/hostname: xip  
       restartPolicy: Never
       containers:
-      - name: mirror
+      - name: mirror-k3s-rancher-mirrored-pause
         # use a container with skopeo or crane installed
         image: quay.io/containers/skopeo:latest
         command: ["skopeo","copy"]
@@ -19,5 +19,5 @@ spec:
           - "--retry-times=3"
           - "--all"
           - "--dest-tls-verify=false"
-          - "docker://ghcr.io/eclipse-autowrx/dk_service_can_provider:latest"
-          - "docker://localhost:5000/eclipse-autowrx/dk_service_can_provider:latest"
+          - "docker://docker.io/rancher/mirrored-pause:3.6"
+          - "docker://localhost:5000/rancher/mirrored-pause:3.6"

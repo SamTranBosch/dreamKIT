@@ -175,6 +175,25 @@ docker_pull_with_info() {
     fi
     echo
 }
+
+apply_manifest() {
+    # -----------------------------------------------------------------
+    # make all placeholders available to envsubst
+    # -----------------------------------------------------------------
+    export DOCKER_HUB_NAMESPACE ARCH DK_USER RUNTIME_NAME HOME_DIR \
+        dk_vip_demo DISPLAY XDG_RUNTIME_DIR
+
+    # -----------------------------------------------------------------
+    MANIFEST_DIR="${CURRENT_DIR}/manifests"
+    local yaml="$1"
+    local VARS='${DOCKER_HUB_NAMESPACE} ${ARCH} ${DK_USER} ${RUNTIME_NAME} \
+                ${HOME_DIR} ${dk_vip_demo} ${DISPLAY} ${XDG_RUNTIME_DIR}'
+    run_with_feedback \
+      "envsubst '${VARS}' < ${MANIFEST_DIR}/${yaml} | kubectl apply -f -" \
+      "Applied manifest ${yaml}" \
+      "Failed to apply ${yaml}"
+}
+
 run_with_feedback() {
     local command=$1
     local success_msg=$2
@@ -310,6 +329,7 @@ main() {
     HOME_DIR="/home/$DK_USER"
     DOCKER_SHARE_PARAM="-v /var/run/docker.sock:/var/run/docker.sock -v /usr/bin/docker:/usr/bin/docker"
     DOCKER_AUDIO_PARAM="--device /dev/snd --group-add audio -e PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native -v ${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native -v $HOME_DIR/.config/pulse/cookie:/root/.config/pulse/cookie"
+    K3S_SHARE_PARAM=" -v /usr/local/bin/kubectl:/usr/local/bin/kubectl:ro -v ~/.kube/config:/root/.kube/config:ro"
     LOG_LIMIT_PARAM="--log-opt max-size=10m --log-opt max-file=3"
     DOCKER_HUB_NAMESPACE="ghcr.io/eclipse-autowrx"
     
@@ -335,58 +355,64 @@ main() {
         run_with_feedback "sudo apt-get update && sudo apt-get install -y git" "Git installed successfully" "Failed to install Git" true true
     fi
     
-    # Step 7: KUKSA Client
-    show_step 7 "KUKSA Client" "Downloading vehicle signal specification client"
-    
-    docker_pull_with_info "ghcr.io/eclipse/kuksa.val/kuksa-client:0.4.2" \
-        "Eclipse KUKSA VAL client for vehicle signal access and testing" \
-        "GitHub Container Registry (Eclipse Foundation)"
-    
-    # Step 8: SDV Runtime
-    show_step 8 "SDV Runtime" "Setting up Software Defined Vehicle runtime environment"
-    
-    docker_pull_with_info "$DOCKER_HUB_NAMESPACE/sdv-runtime:latest" \
-        "Eclipse AutoWrx SDV runtime for vehicle application management" \
-        "GitHub Container Registry (Eclipse AutoWrx Project)"
-    
-    show_info "Configuring SDV runtime container..."
-    show_info "RUNTIME_NAME: $RUNTIME_NAME"
-    run_with_feedback "docker stop sdv-runtime 2>/dev/null || true; docker rm sdv-runtime 2>/dev/null || true" "Cleaned up existing SDV runtime" "Cleanup warning"
-    run_with_feedback "docker run -d -it --name sdv-runtime --restart unless-stopped -e USER=$DK_USER -e RUNTIME_NAME=$RUNTIME_NAME --network host -e ARCH=$ARCH $DOCKER_HUB_NAMESPACE/sdv-runtime:latest" "SDV runtime container started on port 55555" "Failed to start SDV runtime"
-    
-    # Step 9: DreamKit Manager
-    show_step 9 "DreamKit Manager" "Installing core management services"
-    
-    docker_pull_with_info "$DOCKER_HUB_NAMESPACE/dk_manager:latest" \
-        "DreamOS core manager for system orchestration and service management" \
-        "GitHub Container Registry (DreamOS Project)"
-    
-    show_info "Configuring DreamKit manager container..."
-    run_with_feedback "docker stop dk_manager 2>/dev/null || true; docker rm dk_manager 2>/dev/null || true" "Cleaned up existing manager" "Manager cleanup"
-    run_with_feedback "docker run -d -it --name dk_manager $LOG_LIMIT_PARAM $DOCKER_SHARE_PARAM -v $HOME_DIR/.dk:/app/.dk --restart unless-stopped -e USER=$DK_USER -e DOCKER_HUB_NAMESPACE=$DOCKER_HUB_NAMESPACE -e ARCH=$ARCH $DOCKER_HUB_NAMESPACE/dk_manager:latest" "DreamKit manager started with Docker socket access" "Failed to start manager"
+    ###############################################################################
+    # Step 7   local Docker registry
+    ###############################################################################
+    show_step 7 "Docker local registry" "VIP installation"
+    show_info "Setup local registry..."
+    run_with_feedback \
+        "sudo $CURRENT_DIR/scripts/setup_local_docker_registry.sh" \
+        "Docker local host enabled.\
+        \n ✓ You can now use the local Docker registry for your images.\
+        \n ✓ To push images, use: docker push localhost:5000/your-image-name" \
+        "Docker local setup failed"
 
-    # Step 10: App Installation Service
-    show_step 10 "App Services" "Installing application management services"
-
-    docker_pull_with_info "$DOCKER_HUB_NAMESPACE/dk_appinstallservice:latest" \
-        "DreamOS application installation and lifecycle management service" \
-        "GitHub Container Registry (DreamOS Project)"
-    
-    # Step 11: Docker local registry (Optional)
-    show_step 11 "Docker local registry" "VIP installation"
-    dk_vip_demo="false"
-    echo -e "\n${YELLOW}Do you want to continue? [y/N]: ${NC}"
-    read -r install_dockerlocalregistry_choice
-    
-    if [[ "$install_dockerlocalregistry_choice" =~ ^[Yy]$ ]]; then
-        dk_vip_demo="true"
-        show_info "Setup local registry..."
-        run_with_feedback "$CURRENT_DIR/scripts/setup_local_docker_registry.sh" "Docker local host enabled" "Docker local setup failed"
+    ###############################################################################
+    # Step 8   K3s-based installation
+    ###############################################################################
+    show_step 8 "K3s-based installation" "k3s master installation & preparation for local registry"
+    sudo ./scripts/k3s-master-prepare.sh eth0
+    if [ $? -ne 0 ]; then
+        show_error "Failed to prepare K3s master. Please check the logs."
+        exit 1
     fi
-
-    # Step 12: IVI Interface (Optional)
-    show_step 12 "IVI Interface" "Configuring In-Vehicle Infotainment system"
+    show_success "K3s master prepared successfully"
     
+    ###############################################################################
+    # Step 9   SDV Runtime
+    ###############################################################################
+    show_step 9 "SDV Runtime" "Setting up Software Defined Vehicle runtime environment"
+
+    run_with_feedback \
+    "sudo kubectl delete deployment sdv-runtime --ignore-not-found" \
+    "Removed existing SDV runtime (if any)" "Cleanup warning"
+
+    apply_manifest sdv-runtime.yaml
+    run_with_feedback \
+    "sudo kubectl rollout status deployment/sdv-runtime --timeout=240s" \
+    "SDV runtime is READY" \
+    "SDV runtime failed to start"
+
+    ###############################################################################
+    # Step 10   DreamKit Manager
+    ###############################################################################
+    show_step 10 "DreamKit Manager" "Installing core management services"
+
+    run_with_feedback \
+    "sudo kubectl delete deployment dk-manager --ignore-not-found" \
+    "Removed existing manager (if any)" "Manager cleanup warning"
+
+    apply_manifest dk-manager.yaml
+    run_with_feedback \
+    "sudo kubectl rollout status deployment/dk-manager --timeout=240s" \
+    "DreamKit Manager is READY" \
+    "Manager failed to start"
+
+    ###############################################################################
+    # Step 11   IVI Interface (optional)
+    ###############################################################################
+    show_step 11 "IVI Interface" "Configuring In-Vehicle Infotainment system"
+
     # Check for dk_ivi parameter
     dk_ivi_value=""
     for arg in "$@"; do
@@ -396,48 +422,51 @@ main() {
     done
     
     DOCKER_HUB_NAMESPACE="ghcr.io/samtranbosch"
-
-    if [[ "$dk_ivi_value" == "true" ]]; then
-        show_info "Installing IVI interface..."
-        run_with_feedback "sudo $CURRENT_DIR/scripts/dk_enable_xhost.sh" "X11 forwarding enabled" "X11 setup failed"
-        run_with_feedback "docker pull $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI image downloaded" "Failed to download IVI"
-        run_with_feedback "xhost +local:docker" "Docker X11 access granted" "X11 access failed"
-        
-        if [ -f "/etc/nv_tegra_release" ]; then
-            show_info "NVIDIA Jetson board detected - optimizing for hardware"
-            run_with_feedback "docker stop dk_ivi 2>/dev/null || true; docker rm dk_ivi 2>/dev/null || true; docker run -d -it --name dk_ivi --network host -v /usr/bin/docker:/usr/bin/docker -v /usr/local/bin/kubectl:/usr/local/bin/kubectl:ro -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=$DISPLAY -e XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR -e QT_QUICK_BACKEND=software --restart unless-stopped $LOG_LIMIT_PARAM $DOCKER_SHARE_PARAM -v $HOME_DIR/.dk:/app/.dk -e DKCODE=dreamKIT -e DK_USER=$DK_USER -e DK_VIP=$dk_vip_demo -e DK_DOCKER_HUB_NAMESPACE=$DOCKER_HUB_NAMESPACE -e DK_ARCH=$ARCH -e DK_CONTAINER_ROOT=\"/app/.dk/\" $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI started (NVIDIA optimized)" "Failed to start IVI"
-        else
-            show_info "Standard hardware detected - using generic configuration"
-            run_with_feedback "docker stop dk_ivi 2>/dev/null || true; docker rm dk_ivi 2>/dev/null || true; docker run -d -it --name dk_ivi --network host -v /usr/bin/docker:/usr/bin/docker -v /usr/local/bin/kubectl:/usr/local/bin/kubectl:ro -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=$DISPLAY -e XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR --device /dev/dri:/dev/dri --restart unless-stopped $LOG_LIMIT_PARAM $DOCKER_SHARE_PARAM -v $HOME_DIR/.dk:/app/.dk -e DKCODE=dreamKIT -e DK_USER=$DK_USER -e DK_VIP=$dk_vip_demo -e DK_DOCKER_HUB_NAMESPACE=$DOCKER_HUB_NAMESPACE -e DK_ARCH=$ARCH -e DK_CONTAINER_ROOT=\"/app/.dk/\" $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI started (standard)" "Failed to start IVI"
-        fi
-    else
-        show_info "IVI installation skipped"
-        echo -e "\n${CYAN}The In-Vehicle Infotainment (IVI) interface provides a graphical user interface"
-        echo -e "for vehicle dashboard and entertainment features.${NC}"
-        echo -e "\n${YELLOW}Would you like to install the IVI interface now? [y/N]: ${NC}"
-        read -r install_ivi_choice
-        
-        if [[ "$install_ivi_choice" =~ ^[Yy]$ ]]; then
-            echo -e "\n${GREEN}Installing IVI interface...${NC}"
-            run_with_feedback "sudo $CURRENT_DIR/scripts/dk_enable_xhost.sh" "X11 forwarding enabled" "X11 setup failed"
-            run_with_feedback "docker pull $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI image downloaded" "Failed to download IVI"
-            run_with_feedback "xhost +local:docker" "Docker X11 access granted" "X11 access failed"
-            
-            if [ -f "/etc/nv_tegra_release" ]; then
-                show_info "NVIDIA Jetson board detected - optimizing for hardware"
-                run_with_feedback "docker stop dk_ivi 2>/dev/null || true; docker rm dk_ivi 2>/dev/null || true; docker run -d -it --name dk_ivi --network host -v /usr/bin/docker:/usr/bin/docker -v /usr/local/bin/kubectl:/usr/local/bin/kubectl:ro -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=$DISPLAY -e XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR -e QT_QUICK_BACKEND=software --restart unless-stopped $LOG_LIMIT_PARAM $DOCKER_SHARE_PARAM -v $HOME_DIR/.dk:/app/.dk -e DKCODE=dreamKIT -e DK_USER=$DK_USER -e DK_VIP=$dk_vip_demo -e DK_DOCKER_HUB_NAMESPACE=$DOCKER_HUB_NAMESPACE -e DK_ARCH=$ARCH -e DK_CONTAINER_ROOT=\"/app/.dk/\" $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI started (NVIDIA optimized)" "Failed to start IVI"
-            else
-                show_info "Standard hardware detected - using generic configuration"
-                run_with_feedback "docker stop dk_ivi 2>/dev/null || true; docker rm dk_ivi 2>/dev/null || true; docker run -d -it --name dk_ivi --network host -v /usr/bin/docker:/usr/bin/docker -v /usr/local/bin/kubectl:/usr/local/bin/kubectl:ro -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=$DISPLAY -e XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR --device /dev/dri:/dev/dri --restart unless-stopped $LOG_LIMIT_PARAM $DOCKER_SHARE_PARAM -v $HOME_DIR/.dk:/app/.dk -e DKCODE=dreamKIT -e DK_USER=$DK_USER -e DK_VIP=$dk_vip_demo -e DK_DOCKER_HUB_NAMESPACE=$DOCKER_HUB_NAMESPACE -e DK_ARCH=$ARCH -e DK_CONTAINER_ROOT=\"/app/.dk/\" $DOCKER_HUB_NAMESPACE/dk_ivi:latest" "IVI started (standard)" "Failed to start IVI"
-            fi
-            # Update the environment variable to reflect the installation
-            dk_ivi_value="true"
-        else
-            show_info "IVI installation skipped (you can install later with './dk_install dk_ivi=true')"
-        fi
-    fi
     
+    if [[ "$dk_ivi_value" == "true" ]]; then
+    show_info "Installing IVI interface …"
+
+    run_with_feedback "sudo $CURRENT_DIR/scripts/dk_enable_xhost.sh" \
+                        "X11 forwarding enabled" "X11 setup failed"
+    run_with_feedback "xhost +local:docker" "Docker X11 access granted" "X11 access failed"
+
+    run_with_feedback \
+        "sudo kubectl delete deployment dk-ivi --ignore-not-found" \
+        "Removed existing IVI (if any)" "IVI cleanup warning"
+
+    # Decide which manifest to apply
+    if [ -f "/etc/nv_tegra_release" ]; then
+        apply_manifest dk-ivi-jetson.yaml
+    else
+        apply_manifest dk-ivi.yaml
+    fi
+
+    run_with_feedback \
+        "sudo kubectl rollout status deployment/dk-ivi --timeout=300s" \
+        "IVI interface is READY" \
+        "IVI failed to start"
+    else
+        show_info "IVI installation skipped (you can install later with './dk_install dk_ivi=true')"
+    fi
+
+    ###############################################################################
+    # Step 12   NXP-S32G setup (optional)
+    ###############################################################################
+    show_step 12 "NXP-S32G setup" "k3s-agent installation & relavant stuff"
+    nxp_s32g_setup="false"
+    echo -e "\n${YELLOW}Ensure the connection to ECU at ip_address: 192.168.56.49 is good ? [y/N]: ${NC}"
+    read -r nxp_s32g_setup
+    
+    if [[ "$nxp_s32g_setup" =~ ^[Yy]$ ]]; then
+        show_info "Calling NXP-S32G setup script..."
+        run_with_feedback "$CURRENT_DIR/scripts/k3s-agent-offline-install.sh" "NXP-S32G setup completed" "NXP-S32G setup failed"
+    else
+        show_info "NXP-S32G setup skipped (you can install later with calling './scripts/k3s-agent-offline-install.sh')"
+    fi
+
+    ###############################################################################
     # Final steps
+    ###############################################################################
     separator
     echo -e "\n${BLUE}${BOLD}Finalizing installation...${NC}\n"
     

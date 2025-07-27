@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sdv-runtime
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sdv-runtime
+  template:
+    metadata:
+      labels:
+        app: sdv-runtime
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: xip
+      hostNetwork: true
+      containers:
+      - name: sdv-runtime
+        image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest
+        imagePullPolicy: Always
+        env:
+        - name: USER
+          value: "${DK_USER}"
+        - name: RUNTIME_NAME
+          value: "${RUNTIME_NAME}"
+        - name: ARCH
+          value: "${ARCH}"
+        ports:
+        - containerPort: 55555
+          hostPort: 55555

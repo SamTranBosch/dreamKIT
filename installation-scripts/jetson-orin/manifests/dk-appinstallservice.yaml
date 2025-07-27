@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dk-appinstallservice
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dk-appinstallservice
+  template:
+    metadata:
+      labels:
+        app: dk-appinstallservice
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: xip
+      hostNetwork: true
+      containers:
+      - name: dk-appinstallservice
+        image: ${DOCKER_HUB_NAMESPACE}/dk_appinstallservice:latest
+        imagePullPolicy: Always
+        env:
+        - { name: USER, value: "${DK_USER}" }
+        - { name: ARCH, value: "${ARCH}" }
