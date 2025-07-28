@@ -1,0 +1,451 @@
+// ==============================================================================
+// CORE ABSTRACTIONS
+// ==============================================================================
+
+#pragma once
+#include <QObject>
+#include <QAbstractListModel>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QString>
+#include <QVariant>
+#include <QList>
+#include <QFuture>
+#include <memory>
+
+namespace AppManager {
+
+// Forward declarations
+class IAppRepository;
+class IAppInstaller;
+class IAppRuntime;
+class IConfigurationProvider;
+
+//------------------------------------------------------------------------------
+// Core Data Models
+//------------------------------------------------------------------------------
+
+struct AppMetadata {
+    QString id;
+    QString name;
+    QString author;
+    QString version;
+    QString description;
+    QString iconUrl;
+    QString category;
+    double rating = 0.0;
+    int downloads = 0;
+    QJsonObject extendedProperties; // For platform-specific data
+    
+    static AppMetadata fromJson(const QJsonObject& json);
+    QJsonObject toJson() const;
+};
+
+struct AppInstallInfo {
+    QString appId;
+    QString installPath;
+    QDateTime installedAt;
+    QString installerVersion;
+    QJsonObject installConfig;
+    bool isActive = false;
+    
+    static AppInstallInfo fromJson(const QJsonObject& json);
+    QJsonObject toJson() const;
+};
+
+enum class AppStatus {
+    Unknown,
+    Available,
+    Installing,
+    Installed,
+    Running,
+    Stopped,
+    Error,
+    Uninstalling
+};
+
+//------------------------------------------------------------------------------
+// Repository Interface - Abstract app source
+//------------------------------------------------------------------------------
+
+class IAppRepository : public QObject {
+    Q_OBJECT
+public:
+    virtual ~IAppRepository() = default;
+    
+    virtual QFuture<QList<AppMetadata>> searchApps(
+        const QString& query = "",
+        const QString& category = "",
+        int page = 1,
+        int limit = 20
+    ) = 0;
+    
+    virtual QFuture<AppMetadata> getAppDetails(const QString& appId) = 0;
+    virtual QFuture<QByteArray> downloadAppPackage(const QString& appId) = 0;
+    
+    virtual QString name() const = 0;
+    virtual bool requiresAuthentication() const = 0;
+    virtual QFuture<bool> authenticate(const QString& username, const QString& password) = 0;
+
+signals:
+    void searchCompleted(const QList<AppMetadata>& apps);
+    void downloadProgress(const QString& appId, int percentage);
+    void error(const QString& message);
+};
+
+//------------------------------------------------------------------------------
+// Installer Interface - Abstract installation mechanism
+//------------------------------------------------------------------------------
+
+class IAppInstaller : public QObject {
+    Q_OBJECT
+public:
+    virtual ~IAppInstaller() = default;
+    
+    virtual QFuture<bool> installApp(const AppMetadata& app, const QByteArray& packageData) = 0;
+    virtual QFuture<bool> uninstallApp(const QString& appId) = 0;
+    virtual QFuture<QList<AppInstallInfo>> getInstalledApps() = 0;
+    virtual QFuture<bool> updateApp(const QString& appId, const QByteArray& packageData) = 0;
+    
+    virtual QString installerType() const = 0;
+    virtual QStringList supportedPlatforms() const = 0;
+
+signals:
+    void installStarted(const QString& appId);
+    void installProgress(const QString& appId, int percentage);
+    void installCompleted(const QString& appId, bool success);
+    void uninstallCompleted(const QString& appId, bool success);
+    void error(const QString& appId, const QString& message);
+};
+
+//------------------------------------------------------------------------------
+// Runtime Interface - Abstract app execution environment
+//------------------------------------------------------------------------------
+
+class IAppRuntime : public QObject {
+    Q_OBJECT
+public:
+    virtual ~IAppRuntime() = default;
+    
+    virtual QFuture<bool> startApp(const QString& appId) = 0;
+    virtual QFuture<bool> stopApp(const QString& appId) = 0;
+    virtual QFuture<AppStatus> getAppStatus(const QString& appId) = 0;
+    virtual QFuture<QList<QString>> getRunningApps() = 0;
+    
+    virtual QString runtimeType() const = 0;
+    virtual bool supportsApp(const AppMetadata& app) const = 0;
+
+signals:
+    void appStarted(const QString& appId);
+    void appStopped(const QString& appId);
+    void appStatusChanged(const QString& appId, AppStatus status);
+    void error(const QString& appId, const QString& message);
+};
+
+//------------------------------------------------------------------------------
+// Configuration Interface - Abstract configuration management
+//------------------------------------------------------------------------------
+
+class IConfigurationProvider : public QObject {
+    Q_OBJECT
+public:
+    virtual ~IConfigurationProvider() = default;
+    
+    virtual QVariant getValue(const QString& key, const QVariant& defaultValue = QVariant()) const = 0;
+    virtual void setValue(const QString& key, const QVariant& value) = 0;
+    virtual QStringList getCategories() const = 0;
+    virtual QString getInstallPath() const = 0;
+    virtual QString getCachePath() const = 0;
+    
+signals:
+    void configurationChanged(const QString& key, const QVariant& value);
+};
+
+//------------------------------------------------------------------------------
+// Main Application Manager - Orchestrates all components
+//------------------------------------------------------------------------------
+
+class ApplicationManager : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(AppListModel* availableApps READ availableAppsModel CONSTANT)
+    Q_PROPERTY(AppListModel* installedApps READ installedAppsModel CONSTANT)
+    Q_PROPERTY(bool isLoading READ isLoading NOTIFY isLoadingChanged)
+    Q_PROPERTY(QString currentError READ currentError NOTIFY currentErrorChanged)
+
+public:
+    explicit ApplicationManager(QObject* parent = nullptr);
+    virtual ~ApplicationManager() = default;
+    
+    // Component registration
+    void setRepository(std::unique_ptr<IAppRepository> repository);
+    void setInstaller(std::unique_ptr<IAppInstaller> installer);
+    void setRuntime(std::unique_ptr<IAppRuntime> runtime);
+    void setConfigurationProvider(std::unique_ptr<IConfigurationProvider> config);
+    
+    // Properties
+    class AppListModel* availableAppsModel() const { return m_availableApps; }
+    class AppListModel* installedAppsModel() const { return m_installedApps; }
+    bool isLoading() const { return m_isLoading; }
+    QString currentError() const { return m_currentError; }
+
+public slots:
+    void searchApps(const QString& query = "", const QString& category = "");
+    void refreshInstalledApps();
+    void installApp(const QString& appId);
+    void uninstallApp(const QString& appId);
+    void startApp(const QString& appId);
+    void stopApp(const QString& appId);
+
+signals:
+    void isLoadingChanged(bool isLoading);
+    void currentErrorChanged(const QString& error);
+    void appInstalled(const QString& appId, bool success);
+    void appUninstalled(const QString& appId, bool success);
+    void appStarted(const QString& appId, bool success);
+    void appStopped(const QString& appId, bool success);
+
+private slots:
+    void onSearchCompleted(const QList<AppMetadata>& apps);
+    void onInstallCompleted(const QString& appId, bool success);
+    void onAppStatusChanged(const QString& appId, AppStatus status);
+
+private:
+    void setLoading(bool loading);
+    void setError(const QString& error);
+    
+    std::unique_ptr<IAppRepository> m_repository;
+    std::unique_ptr<IAppInstaller> m_installer;
+    std::unique_ptr<IAppRuntime> m_runtime;
+    std::unique_ptr<IConfigurationProvider> m_config;
+    
+    class AppListModel* m_availableApps;
+    class AppListModel* m_installedApps;
+    
+    bool m_isLoading = false;
+    QString m_currentError;
+};
+
+//------------------------------------------------------------------------------
+// QML-friendly App List Model
+//------------------------------------------------------------------------------
+
+class AppListModel : public QAbstractListModel {
+    Q_OBJECT
+    
+public:
+    enum Roles {
+        IdRole = Qt::UserRole + 1,
+        NameRole,
+        AuthorRole,
+        VersionRole,
+        DescriptionRole,
+        IconUrlRole,
+        CategoryRole,
+        RatingRole,
+        DownloadsRole,
+        StatusRole,
+        IsInstalledRole,
+        IsRunningRole
+    };
+    Q_ENUM(Roles)
+    
+    explicit AppListModel(QObject* parent = nullptr);
+    
+    // QAbstractListModel interface
+    int rowCount(const QModelIndex& parent = QModelIndex()) const override;
+    QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
+    QHash<int, QByteArray> roleNames() const override;
+    
+    // Model management
+    void updateApps(const QList<AppMetadata>& apps);
+    void updateAppStatus(const QString& appId, AppStatus status);
+    
+    Q_INVOKABLE QVariantMap get(int index) const;
+    Q_INVOKABLE int findAppIndex(const QString& appId) const;
+
+private:
+    struct AppItem {
+        AppMetadata metadata;
+        AppStatus status = AppStatus::Unknown;
+        bool isInstalled = false;
+        bool isRunning = false;
+    };
+    
+    QList<AppItem> m_apps;
+};
+
+// ==============================================================================
+// CONCRETE IMPLEMENTATIONS
+// ==============================================================================
+
+//------------------------------------------------------------------------------
+// Kubernetes/Docker Implementation
+//------------------------------------------------------------------------------
+
+class K8sDockerInstaller : public IAppInstaller {
+    Q_OBJECT
+    
+public:
+    explicit K8sDockerInstaller(IConfigurationProvider* config, QObject* parent = nullptr);
+    
+    QFuture<bool> installApp(const AppMetadata& app, const QByteArray& packageData) override;
+    QFuture<bool> uninstallApp(const QString& appId) override;
+    QFuture<QList<AppInstallInfo>> getInstalledApps() override;
+    QFuture<bool> updateApp(const QString& appId, const QByteArray& packageData) override;
+    
+    QString installerType() const override { return "kubernetes-docker"; }
+    QStringList supportedPlatforms() const override { return {"linux", "vehicle"}; }
+
+private:
+    struct InstallTask {
+        QString appId;
+        QStringList commands;
+        int currentStep = 0;
+    };
+    
+    void executeNextStep(InstallTask& task);
+    QString generateDeploymentYaml(const AppMetadata& app) const;
+    QString generatePullJobYaml(const AppMetadata& app) const;
+    
+    IConfigurationProvider* m_config;
+    QHash<QString, InstallTask> m_activeTasks;
+};
+
+class K8sDockerRuntime : public IAppRuntime {
+    Q_OBJECT
+    
+public:
+    explicit K8sDockerRuntime(IConfigurationProvider* config, QObject* parent = nullptr);
+    
+    QFuture<bool> startApp(const QString& appId) override;
+    QFuture<bool> stopApp(const QString& appId) override;
+    QFuture<AppStatus> getAppStatus(const QString& appId) override;
+    QFuture<QList<QString>> getRunningApps() override;
+    
+    QString runtimeType() const override { return "kubernetes-docker"; }
+    bool supportsApp(const AppMetadata& app) const override;
+
+private:
+    IConfigurationProvider* m_config;
+};
+
+//------------------------------------------------------------------------------
+// HTTP Marketplace Repository
+//------------------------------------------------------------------------------
+
+class HttpMarketplaceRepository : public IAppRepository {
+    Q_OBJECT
+    
+public:
+    explicit HttpMarketplaceRepository(const QString& baseUrl, QObject* parent = nullptr);
+    
+    QFuture<QList<AppMetadata>> searchApps(
+        const QString& query = "",
+        const QString& category = "",
+        int page = 1,
+        int limit = 20
+    ) override;
+    
+    QFuture<AppMetadata> getAppDetails(const QString& appId) override;
+    QFuture<QByteArray> downloadAppPackage(const QString& appId) override;
+    
+    QString name() const override { return m_name; }
+    bool requiresAuthentication() const override { return !m_loginUrl.isEmpty(); }
+    QFuture<bool> authenticate(const QString& username, const QString& password) override;
+
+private:
+    QString m_baseUrl;
+    QString m_loginUrl;
+    QString m_name;
+    QString m_authToken;
+    class QNetworkAccessManager* m_networkManager;
+};
+
+//------------------------------------------------------------------------------
+// JSON Configuration Provider
+//------------------------------------------------------------------------------
+
+class JsonConfigurationProvider : public IConfigurationProvider {
+    Q_OBJECT
+    
+public:
+    explicit JsonConfigurationProvider(const QString& configPath, QObject* parent = nullptr);
+    
+    QVariant getValue(const QString& key, const QVariant& defaultValue = QVariant()) const override;
+    void setValue(const QString& key, const QVariant& value) override;
+    QStringList getCategories() const override;
+    QString getInstallPath() const override;
+    QString getCachePath() const override;
+
+private:
+    void loadConfiguration();
+    void saveConfiguration();
+    
+    QString m_configPath;
+    QJsonObject m_config;
+};
+
+//------------------------------------------------------------------------------
+// Factory for creating platform-specific implementations
+//------------------------------------------------------------------------------
+
+class AppManagerFactory {
+public:
+    static std::unique_ptr<ApplicationManager> createManager(
+        const QString& platform = "auto",
+        const QString& configPath = ""
+    );
+    
+    static std::unique_ptr<IAppRepository> createRepository(
+        const QString& type,
+        const QVariantMap& config
+    );
+    
+    static std::unique_ptr<IAppInstaller> createInstaller(
+        const QString& type,
+        IConfigurationProvider* config
+    );
+    
+    static std::unique_ptr<IAppRuntime> createRuntime(
+        const QString& type,
+        IConfigurationProvider* config
+    );
+    
+    static std::unique_ptr<IConfigurationProvider> createConfigProvider(
+        const QString& type,
+        const QString& configPath
+    );
+};
+
+// ==============================================================================
+// PLUGIN SYSTEM
+// ==============================================================================
+
+class IAppManagerPlugin {
+public:
+    virtual ~IAppManagerPlugin() = default;
+    virtual QString pluginName() const = 0;
+    virtual QString pluginVersion() const = 0;
+    virtual QStringList supportedTypes() const = 0;
+    
+    virtual std::unique_ptr<IAppRepository> createRepository(const QVariantMap& config) { return nullptr; }
+    virtual std::unique_ptr<IAppInstaller> createInstaller(IConfigurationProvider* config) { return nullptr; }
+    virtual std::unique_ptr<IAppRuntime> createRuntime(IConfigurationProvider* config) { return nullptr; }
+};
+
+#define AppManagerPlugin_IID "com.appmanager.plugin/1.0"
+Q_DECLARE_INTERFACE(IAppManagerPlugin, AppManagerPlugin_IID)
+
+class PluginManager {
+public:
+    static PluginManager& instance();
+    
+    void loadPlugins(const QString& pluginDir);
+    QStringList availablePlugins() const;
+    IAppManagerPlugin* getPlugin(const QString& name) const;
+    
+private:
+    QHash<QString, IAppManagerPlugin*> m_plugins;
+};
+
+} // namespace AppManager

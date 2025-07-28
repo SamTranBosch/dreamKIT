@@ -1,56 +1,37 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QDir>
 
-#include "../digitalauto/digitalauto.hpp"
-#include "../marketplace/marketplace.hpp"
-#include "../installedservices/installedservices.hpp"
-#include "../installedvapps/installedvapps.hpp"
-#include "../controls/controls.hpp"
-#include "../library/vapiclient/vapiclient.hpp"
+#include "../core/applicationmanager.h"
+#include "../factory/appmanagerfactory.h"
 
 int main(int argc, char *argv[])
 {
-    // qputenv("QT_IM_MODULE", QByteArray("qtvirtualkeyboard"));
-
     QGuiApplication app(argc, argv);
-
-    // VAPI Client Initilization
-    VAPI_CLIENT.connectToServer(DK_VAPI_DATABROKER);
-    // Pages
-    qmlRegisterType<DigitalAutoAppAsync>("DigitalAutoAppAsync", 1, 0, "DigitalAutoAppAsync");
-    qmlRegisterType<CategoryListModel>("MyApp",1,0,"CategoryListModel");
-    qmlRegisterType<AppListModel>("MyApp",1,0,"AppListModel");
-    qmlRegisterType<MarketplaceViewModel>("MyApp",1,0,"MarketplaceViewModel");
-
-    qmlRegisterType<VsersAsync>("VsersAsync", 1, 0, "VsersAsync");
-    qmlRegisterType<VappsAsync>("VappsAsync", 1, 0, "VappsAsync");
-    qmlRegisterType<ControlsAsync>("ControlsAsync", 1, 0, "ControlsAsync");
-
+    
+    // Register QML types
+    qmlRegisterType<AppManager::ApplicationManager>("AppManager", 1, 0, "ApplicationManager");
+    qmlRegisterType<AppManager::AppListModel>("AppManager", 1, 0, "AppListModel");
+    qmlRegisterUncreatableType<AppManager::AppStatus>("AppManager", 1, 0, "AppStatus", "Enum type");
+    
+    // Create application manager with auto-detected platform
+    auto appManager = AppManager::AppManagerFactory::createManager("auto", "");
+    
     QQmlApplicationEngine engine;
-    const QUrl url1(QStringLiteral("qrc:/untitled2/main/main.qml"));
-    const QUrl url2(QStringLiteral("qrc:/main/main.qml"));
-
-    // Track which url is being tried
-    static bool triedFallback = false;
-
-    // Use a lambda that can capture and modify triedFallback
+    
+    // Expose the manager to QML
+    engine.rootContext()->setContextProperty("appManagerInstance", appManager.get());
+    
+    // Load main QML file
+    const QUrl url(QStringLiteral("qrc:/AppManager/main/main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
-                 &app, [&engine, &app, url1, url2](QObject *obj, const QUrl &objUrl) mutable {
-                     static bool triedFallback = false;
-                     if (!obj) {
-                         if (!triedFallback && objUrl == url1) {
-                             // First URL failed, try second
-                             triedFallback = true;
-                             engine.load(url2);
-                         } else {
-                             // Second URL also failed, exit with error
-                             QCoreApplication::exit(-1);
-                         }
-                     }
-                 }, Qt::QueuedConnection);
-
-    engine.load(url1);
-
+                     &app, [url](QObject *obj, const QUrl &objUrl) {
+        if (!obj && url == objUrl)
+            QCoreApplication::exit(-1);
+    }, Qt::QueuedConnection);
+    
+    engine.load(url);
+    
     return app.exec();
 }

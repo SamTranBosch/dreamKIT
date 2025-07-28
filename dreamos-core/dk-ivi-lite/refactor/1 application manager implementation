@@ -1,0 +1,1114 @@
+// applicationmanager.cpp
+#include "applicationmanager.h"
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QUrlQuery>
+#include <QEventLoop>
+#include <QProcess>
+#include <QTimer>
+#include <QDir>
+#include <QStandardPaths>
+#include <QtConcurrent>
+#include <QDebug>
+
+namespace AppManager {
+
+//------------------------------------------------------------------------------
+// AppMetadata Implementation
+//------------------------------------------------------------------------------
+
+AppMetadata AppMetadata::fromJson(const QJsonObject& json) {
+    AppMetadata metadata;
+    metadata.id = json.value("_id").toString();
+    metadata.name = json.value("name").toString();
+    metadata.version = json.value("version").toString();
+    metadata.description = json.value("description").toString();
+    metadata.iconUrl = json.value("thumbnail").toString();
+    metadata.category = json.value("category").toString();
+    metadata.rating = json.value("rating").toDouble();
+    metadata.downloads = json.value("downloads").toInt();
+    
+    if (json.contains("storeId") && json.value("storeId").isObject()) {
+        metadata.author = json.value("storeId").toObject().value("name").toString();
+    }
+    
+    // Store any additional properties
+    for (auto it = json.begin(); it != json.end(); ++it) {
+        if (!QStringList{"_id", "name", "version", "description", "thumbnail", 
+                         "category", "rating", "downloads", "storeId"}.contains(it.key())) {
+            metadata.extendedProperties[it.key()] = it.value();
+        }
+    }
+    
+    return metadata;
+}
+
+QJsonObject AppMetadata::toJson() const {
+    QJsonObject json;
+    json["_id"] = id;
+    json["name"] = name;
+    json["version"] = version;
+    json["description"] = description;
+    json["thumbnail"] = iconUrl;
+    json["category"] = category;
+    json["rating"] = rating;
+    json["downloads"] = downloads;
+    
+    QJsonObject storeId;
+    storeId["name"] = author;
+    json["storeId"] = storeId;
+    
+    // Add extended properties
+    for (auto it = extendedProperties.begin(); it != extendedProperties.end(); ++it) {
+        json[it.key()] = it.value();
+    }
+    
+    return json;
+}
+
+//------------------------------------------------------------------------------
+// AppInstallInfo Implementation
+//------------------------------------------------------------------------------
+
+AppInstallInfo AppInstallInfo::fromJson(const QJsonObject& json) {
+    AppInstallInfo info;
+    info.appId = json.value("appId").toString();
+    info.installPath = json.value("installPath").toString();
+    info.installedAt = QDateTime::fromString(json.value("installedAt").toString(), Qt::ISODate);
+    info.installerVersion = json.value("installerVersion").toString();
+    info.installConfig = json.value("installConfig").toObject();
+    info.isActive = json.value("isActive").toBool();
+    return info;
+}
+
+QJsonObject AppInstallInfo::toJson() const {
+    QJsonObject json;
+    json["appId"] = appId;
+    json["installPath"] = installPath;
+    json["installedAt"] = installedAt.toString(Qt::ISODate);
+    json["installerVersion"] = installerVersion;
+    json["installConfig"] = installConfig;
+    json["isActive"] = isActive;
+    return json;
+}
+
+//------------------------------------------------------------------------------
+// ApplicationManager Implementation
+//------------------------------------------------------------------------------
+
+ApplicationManager::ApplicationManager(QObject* parent)
+    : QObject(parent)
+    , m_availableApps(new AppListModel(this))
+    , m_installedApps(new AppListModel(this))
+{
+}
+
+void ApplicationManager::setRepository(std::unique_ptr<IAppRepository> repository) {
+    if (m_repository) {
+        disconnect(m_repository.get(), nullptr, this, nullptr);
+    }
+    
+    m_repository = std::move(repository);
+    
+    if (m_repository) {
+        connect(m_repository.get(), &IAppRepository::searchCompleted,
+                this, &ApplicationManager::onSearchCompleted);
+        connect(m_repository.get(), &IAppRepository::error,
+                this, &ApplicationManager::setError);
+    }
+}
+
+void ApplicationManager::setInstaller(std::unique_ptr<IAppInstaller> installer) {
+    if (m_installer) {
+        disconnect(m_installer.get(), nullptr, this, nullptr);
+    }
+    
+    m_installer = std::move(installer);
+    
+    if (m_installer) {
+        connect(m_installer.get(), &IAppInstaller::installCompleted,
+                this, &ApplicationManager::onInstallCompleted);
+        connect(m_installer.get(), &IAppInstaller::uninstallCompleted,
+                this, [this](const QString& appId, bool success) {
+                    emit appUninstalled(appId, success);
+                    refreshInstalledApps();
+                });
+        connect(m_installer.get(), &IAppInstaller::error,
+                this, &ApplicationManager::setError);
+    }
+}
+
+void ApplicationManager::setRuntime(std::unique_ptr<IAppRuntime> runtime) {
+    if (m_runtime) {
+        disconnect(m_runtime.get(), nullptr, this, nullptr);
+    }
+    
+    m_runtime = std::move(runtime);
+    
+    if (m_runtime) {
+        connect(m_runtime.get(), &IAppRuntime::appStatusChanged,
+                this, &ApplicationManager::onAppStatusChanged);
+        connect(m_runtime.get(), &IAppRuntime::error,
+                this, &ApplicationManager::setError);
+    }
+}
+
+void ApplicationManager::setConfigurationProvider(std::unique_ptr<IConfigurationProvider> config) {
+    m_config = std::move(config);
+}
+
+void ApplicationManager::searchApps(const QString& query, const QString& category) {
+    if (!m_repository) {
+        setError("No repository configured");
+        return;
+    }
+    
+    setLoading(true);
+    setError("");
+    
+    auto future = m_repository->searchApps(query, category);
+    // Future handling would typically use QtConcurrent or custom async handling
+}
+
+void ApplicationManager::refreshInstalledApps() {
+    if (!m_installer) {
+        setError("No installer configured");
+        return;
+    }
+    
+    auto future = m_installer->getInstalledApps();
+    // Handle future result to update installed apps model
+}
+
+void ApplicationManager::installApp(const QString& appId) {
+    if (!m_repository || !m_installer) {
+        setError("Repository or installer not configured");
+        return;
+    }
+    
+    // Find app in available apps
+    int index = m_availableApps->findAppIndex(appId);
+    if (index < 0) {
+        setError("App not found in available apps");
+        return;
+    }
+    
+    auto appData = m_availableApps->get(index);
+    AppMetadata metadata;
+    metadata.id = appData.value("id").toString();
+    metadata.name = appData.value("name").toString();
+    // ... populate other fields
+    
+    setLoading(true);
+    
+    // Download and install
+    auto downloadFuture = m_repository->downloadAppPackage(appId);
+    // Chain with install operation
+}
+
+void ApplicationManager::uninstallApp(const QString& appId) {
+    if (!m_installer) {
+        setError("No installer configured");
+        return;
+    }
+    
+    setLoading(true);
+    auto future = m_installer->uninstallApp(appId);
+}
+
+void ApplicationManager::startApp(const QString& appId) {
+    if (!m_runtime) {
+        setError("No runtime configured");
+        return;
+    }
+    
+    auto future = m_runtime->startApp(appId);
+}
+
+void ApplicationManager::stopApp(const QString& appId) {
+    if (!m_runtime) {
+        setError("No runtime configured");
+        return;
+    }
+    
+    auto future = m_runtime->stopApp(appId);
+}
+
+void ApplicationManager::onSearchCompleted(const QList<AppMetadata>& apps) {
+    m_availableApps->updateApps(apps);
+    setLoading(false);
+}
+
+void ApplicationManager::onInstallCompleted(const QString& appId, bool success) {
+    emit appInstalled(appId, success);
+    setLoading(false);
+    
+    if (success) {
+        refreshInstalledApps();
+    }
+}
+
+void ApplicationManager::onAppStatusChanged(const QString& appId, AppStatus status) {
+    m_availableApps->updateAppStatus(appId, status);
+    m_installedApps->updateAppStatus(appId, status);
+}
+
+void ApplicationManager::setLoading(bool loading) {
+    if (m_isLoading != loading) {
+        m_isLoading = loading;
+        emit isLoadingChanged(loading);
+    }
+}
+
+void ApplicationManager::setError(const QString& error) {
+    if (m_currentError != error) {
+        m_currentError = error;
+        emit currentErrorChanged(error);
+    }
+}
+
+//------------------------------------------------------------------------------
+// AppListModel Implementation
+//------------------------------------------------------------------------------
+
+AppListModel::AppListModel(QObject* parent)
+    : QAbstractListModel(parent)
+{
+}
+
+int AppListModel::rowCount(const QModelIndex& parent) const {
+    Q_UNUSED(parent)
+    return m_apps.size();
+}
+
+QVariant AppListModel::data(const QModelIndex& index, int role) const {
+    if (!index.isValid() || index.row() >= m_apps.size()) {
+        return QVariant();
+    }
+    
+    const AppItem& item = m_apps.at(index.row());
+    
+    switch (role) {
+    case IdRole: return item.metadata.id;
+    case NameRole: return item.metadata.name;
+    case AuthorRole: return item.metadata.author;
+    case VersionRole: return item.metadata.version;
+    case DescriptionRole: return item.metadata.description;
+    case IconUrlRole: return item.metadata.iconUrl;
+    case CategoryRole: return item.metadata.category;
+    case RatingRole: return item.metadata.rating;
+    case DownloadsRole: return item.metadata.downloads;
+    case StatusRole: return static_cast<int>(item.status);
+    case IsInstalledRole: return item.isInstalled;
+    case IsRunningRole: return item.isRunning;
+    default: return QVariant();
+    }
+}
+
+QHash<int, QByteArray> AppListModel::roleNames() const {
+    static QHash<int, QByteArray> roles = {
+        {IdRole, "id"},
+        {NameRole, "name"},
+        {AuthorRole, "author"},
+        {VersionRole, "version"},
+        {DescriptionRole, "description"},
+        {IconUrlRole, "iconUrl"},
+        {CategoryRole, "category"},
+        {RatingRole, "rating"},
+        {DownloadsRole, "downloads"},
+        {StatusRole, "status"},
+        {IsInstalledRole, "isInstalled"},
+        {IsRunningRole, "isRunning"}
+    };
+    return roles;
+}
+
+void AppListModel::updateApps(const QList<AppMetadata>& apps) {
+    beginResetModel();
+    m_apps.clear();
+    for (const auto& metadata : apps) {
+        AppItem item;
+        item.metadata = metadata;
+        item.status = AppStatus::Available;
+        m_apps.append(item);
+    }
+    endResetModel();
+}
+
+void AppListModel::updateAppStatus(const QString& appId, AppStatus status) {
+    for (int i = 0; i < m_apps.size(); ++i) {
+        if (m_apps[i].metadata.id == appId) {
+            m_apps[i].status = status;
+            m_apps[i].isInstalled = (status == AppStatus::Installed || status == AppStatus::Running);
+            m_apps[i].isRunning = (status == AppStatus::Running);
+            
+            QModelIndex index = this->index(i);
+            emit dataChanged(index, index);
+            break;
+        }
+    }
+}
+
+QVariantMap AppListModel::get(int index) const {
+    QVariantMap map;
+    if (index >= 0 && index < m_apps.size()) {
+        const AppItem& item = m_apps.at(index);
+        map["id"] = item.metadata.id;
+        map["name"] = item.metadata.name;
+        map["author"] = item.metadata.author;
+        map["version"] = item.metadata.version;
+        map["description"] = item.metadata.description;
+        map["iconUrl"] = item.metadata.iconUrl;
+        map["category"] = item.metadata.category;
+        map["rating"] = item.metadata.rating;
+        map["downloads"] = item.metadata.downloads;
+        map["status"] = static_cast<int>(item.status);
+        map["isInstalled"] = item.isInstalled;
+        map["isRunning"] = item.isRunning;
+    }
+    return map;
+}
+
+int AppListModel::findAppIndex(const QString& appId) const {
+    for (int i = 0; i < m_apps.size(); ++i) {
+        if (m_apps[i].metadata.id == appId) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+//------------------------------------------------------------------------------
+// K8sDockerInstaller Implementation
+//------------------------------------------------------------------------------
+
+K8sDockerInstaller::K8sDockerInstaller(IConfigurationProvider* config, QObject* parent)
+    : IAppInstaller(parent), m_config(config)
+{
+}
+
+QFuture<bool> K8sDockerInstaller::installApp(const AppMetadata& app, const QByteArray& packageData) {
+    return QtConcurrent::run([this, app, packageData]() -> bool {
+        emit installStarted(app.id);
+        
+        // Create installation directory
+        QString installPath = m_config->getInstallPath() + "/" + app.id;
+        QDir().mkpath(installPath);
+        
+        // Generate YAML files
+        QString deploymentYaml = generateDeploymentYaml(app);
+        QString pullJobYaml = generatePullJobYaml(app);
+        
+        // Save YAML files
+        QString deploymentFile = installPath + "/" + app.id + "_deployment.yaml";
+        QString pullJobFile = installPath + "/" + app.id + "_pull.yaml";
+        
+        QFile(deploymentFile).write(deploymentYaml.toUtf8());
+        QFile(pullJobFile).write(pullJobYaml.toUtf8());
+        
+        // Execute installation steps
+        InstallTask task;
+        task.appId = app.id;
+        task.commands = {
+            QString("kubectl apply -f %1").arg(pullJobFile),
+            QString("kubectl wait --for=condition=complete job/pull-%1 --timeout=300s").arg(app.id.toLower()),
+            QString("kubectl delete job pull-%1").arg(app.id.toLower()),
+            QString("kubectl apply -f %1").arg(deploymentFile)
+        };
+        
+        // Execute commands sequentially
+        for (const QString& cmd : task.commands) {
+            QProcess process;
+            process.start("sh", QStringList{"-c", cmd});
+            
+            if (!process.waitForFinished(30000)) { // 30 second timeout
+                emit error(app.id, "Installation timeout: " + cmd);
+                return false;
+            }
+            
+            if (process.exitCode() != 0) {
+                emit error(app.id, "Installation failed: " + process.readAllStandardError());
+                return false;
+            }
+            
+            emit installProgress(app.id, (task.currentStep * 100) / task.commands.size());
+            task.currentStep++;
+        }
+        
+        // Save installation info
+        AppInstallInfo installInfo;
+        installInfo.appId = app.id;
+        installInfo.installPath = installPath;
+        installInfo.installedAt = QDateTime::currentDateTime();
+        installInfo.installerVersion = "1.0";
+        installInfo.isActive = true;
+        
+        // Update tracking file
+        QString trackingFile = m_config->getValue("trackingFile").toString();
+        QJsonDocument doc;
+        QJsonArray apps;
+        
+        QFile file(trackingFile);
+        if (file.exists() && file.open(QIODevice::ReadOnly)) {
+            doc = QJsonDocument::fromJson(file.readAll());
+            if (doc.isArray()) apps = doc.array();
+            file.close();
+        }
+        
+        apps.append(installInfo.toJson());
+        
+        if (file.open(QIODevice::WriteOnly)) {
+            file.write(QJsonDocument(apps).toJson());
+            file.close();
+        }
+        
+        emit installCompleted(app.id, true);
+        return true;
+    });
+}
+
+QFuture<bool> K8sDockerInstaller::uninstallApp(const QString& appId) {
+    return QtConcurrent::run([this, appId]() -> bool {
+        QString installPath = m_config->getInstallPath() + "/" + appId;
+        QString deploymentFile = installPath + "/" + appId + "_deployment.yaml";
+        
+        // Delete Kubernetes resources
+        QProcess process;
+        process.start("kubectl", QStringList{"delete", "-f", deploymentFile});
+        
+        if (!process.waitForFinished(30000)) {
+            emit error(appId, "Uninstall timeout");
+            return false;
+        }
+        
+        // Remove installation directory
+        QDir(installPath).removeRecursively();
+        
+        // Update tracking file
+        QString trackingFile = m_config->getValue("trackingFile").toString();
+        QJsonDocument doc;
+        QJsonArray apps;
+        
+        QFile file(trackingFile);
+        if (file.exists() && file.open(QIODevice::ReadOnly)) {
+            doc = QJsonDocument::fromJson(file.readAll());
+            if (doc.isArray()) {
+                QJsonArray originalApps = doc.array();
+                for (const auto& value : originalApps) {
+                    QJsonObject app = value.toObject();
+                    if (app.value("appId").toString() != appId) {
+                        apps.append(app);
+                    }
+                }
+            }
+            file.close();
+        }
+        
+        if (file.open(QIODevice::WriteOnly)) {
+            file.write(QJsonDocument(apps).toJson());
+            file.close();
+        }
+        
+        emit uninstallCompleted(appId, true);
+        return true;
+    });
+}
+
+QFuture<QList<AppInstallInfo>> K8sDockerInstaller::getInstalledApps() {
+    return QtConcurrent::run([this]() -> QList<AppInstallInfo> {
+        QList<AppInstallInfo> installedApps;
+        
+        QString trackingFile = m_config->getValue("trackingFile").toString();
+        QFile file(trackingFile);
+        
+        if (file.exists() && file.open(QIODevice::ReadOnly)) {
+            QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+            if (doc.isArray()) {
+                for (const auto& value : doc.array()) {
+                    installedApps.append(AppInstallInfo::fromJson(value.toObject()));
+                }
+            }
+            file.close();
+        }
+        
+        return installedApps;
+    });
+}
+
+QFuture<bool> K8sDockerInstaller::updateApp(const QString& appId, const QByteArray& packageData) {
+    return QtConcurrent::run([this, appId, packageData]() -> bool {
+        // For Kubernetes, update means recreate the deployment
+        uninstallApp(appId).waitForFinished();
+        
+        // Get app metadata and reinstall
+        // This would require access to the repository to get updated metadata
+        // Implementation depends on specific requirements
+        
+        return true;
+    });
+}
+
+QString K8sDockerInstaller::generateDeploymentYaml(const AppMetadata& app) const {
+    // Extract configuration from extended properties
+    QJsonObject dashboardConfig = app.extendedProperties.value("dashboardConfig").toObject();
+    QString image = dashboardConfig.value("DockerImageURL").toString();
+    QString target = dashboardConfig.value("Target").toString();
+    QJsonObject runtimeCfg = dashboardConfig.value("RuntimeCfg").toObject();
+    
+    QString node = target.isEmpty() || target == "xip" ? "xip" : "vip";
+    QString lcName = app.name.toLower();
+    
+    // Build environment variables
+    QStringList envLines;
+    for (auto it = runtimeCfg.begin(); it != runtimeCfg.end(); ++it) {
+        if (it.key() != "node" && it.key() != "args") {
+            envLines += QString("            - name: %1\n              value: \"%2\"")
+                       .arg(it.key(), it.value().toString());
+        }
+    }
+    QString envBlock = envLines.isEmpty() ? "            # no environment variables" : envLines.join("\n");
+    
+    // Build args
+    QStringList argLines;
+    QJsonArray args = runtimeCfg.value("args").toArray();
+    for (const auto& arg : args) {
+        argLines += QString("           - \"%1\"").arg(arg.toString());
+    }
+    QString argBlock = argLines.isEmpty() ? "           # no args" : argLines.join("\n");
+    
+    QString deploymentTemplate = R"(apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: %1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: %1
+  template:
+    metadata:
+      labels:
+        app: %1
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: %2
+      hostNetwork: true
+      containers:
+      - name: %1
+        image: %3
+        env:
+%4
+        args:
+%5
+        securityContext:
+          privileged: true
+        tty: true
+        stdin: true
+)";
+    
+    return deploymentTemplate.arg(lcName, node, image, envBlock, argBlock);
+}
+
+QString K8sDockerInstaller::generatePullJobYaml(const AppMetadata& app) const {
+    QJsonObject dashboardConfig = app.extendedProperties.value("dashboardConfig").toObject();
+    QString image = dashboardConfig.value("DockerImageURL").toString();
+    QString target = dashboardConfig.value("Target").toString();
+    QString node = target.isEmpty() || target == "xip" ? "xip" : "vip";
+    QString lcName = app.name.toLower();
+    
+    QString pullTemplate = R"(apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pull-%1
+spec:
+  template:
+    spec:
+      hostNetwork: true
+      nodeSelector:
+        kubernetes.io/hostname: %2
+      restartPolicy: Never
+      containers:
+      - name: pull
+        image: %3
+        command: ["true"]
+)";
+    
+    return pullTemplate.arg(lcName, node, image);
+}
+
+//------------------------------------------------------------------------------
+// K8sDockerRuntime Implementation
+//------------------------------------------------------------------------------
+
+K8sDockerRuntime::K8sDockerRuntime(IConfigurationProvider* config, QObject* parent)
+    : IAppRuntime(parent), m_config(config)
+{
+}
+
+QFuture<bool> K8sDockerRuntime::startApp(const QString& appId) {
+    return QtConcurrent::run([this, appId]() -> bool {
+        QString deploymentFile = m_config->getInstallPath() + "/" + appId + "/" + appId + "_deployment.yaml";
+        
+        QProcess process;
+        process.start("kubectl", QStringList{"apply", "-f", deploymentFile});
+        
+        if (!process.waitForFinished(30000)) {
+            emit error(appId, "Start timeout");
+            return false;
+        }
+        
+        if (process.exitCode() == 0) {
+            emit appStarted(appId);
+            emit appStatusChanged(appId, AppStatus::Running);
+            return true;
+        } else {
+            emit error(appId, "Failed to start: " + process.readAllStandardError());
+            return false;
+        }
+    });
+}
+
+QFuture<bool> K8sDockerRuntime::stopApp(const QString& appId) {
+    return QtConcurrent::run([this, appId]() -> bool {
+        QString deploymentFile = m_config->getInstallPath() + "/" + appId + "/" + appId + "_deployment.yaml";
+        
+        QProcess process;
+        process.start("kubectl", QStringList{"delete", "-f", deploymentFile});
+        
+        if (!process.waitForFinished(30000)) {
+            emit error(appId, "Stop timeout");
+            return false;
+        }
+        
+        if (process.exitCode() == 0) {
+            emit appStopped(appId);
+            emit appStatusChanged(appId, AppStatus::Stopped);
+            return true;
+        } else {
+            emit error(appId, "Failed to stop: " + process.readAllStandardError());
+            return false;
+        }
+    });
+}
+
+QFuture<AppStatus> K8sDockerRuntime::getAppStatus(const QString& appId) {
+    return QtConcurrent::run([this, appId]() -> AppStatus {
+        QString lcName = appId.toLower();
+        
+        QProcess process;
+        process.start("kubectl", QStringList{"get", "deployment", lcName, "-o", "json"});
+        
+        if (!process.waitForFinished(10000)) {
+            return AppStatus::Unknown;
+        }
+        
+        if (process.exitCode() != 0) {
+            return AppStatus::Stopped;
+        }
+        
+        QJsonDocument doc = QJsonDocument::fromJson(process.readAllStandardOutput());
+        QJsonObject deployment = doc.object();
+        QJsonObject status = deployment.value("status").toObject();
+        
+        int readyReplicas = status.value("readyReplicas").toInt();
+        int replicas = status.value("replicas").toInt();
+        
+        if (readyReplicas > 0 && readyReplicas == replicas) {
+            return AppStatus::Running;
+        } else if (replicas > 0) {
+            return AppStatus::Installing; // Pods are starting
+        } else {
+            return AppStatus::Stopped;
+        }
+    });
+}
+
+QFuture<QList<QString>> K8sDockerRuntime::getRunningApps() {
+    return QtConcurrent::run([this]() -> QList<QString> {
+        QList<QString> runningApps;
+        
+        QProcess process;
+        process.start("kubectl", QStringList{"get", "deployments", "-o", "json"});
+        
+        if (!process.waitForFinished(10000)) {
+            return runningApps;
+        }
+        
+        if (process.exitCode() == 0) {
+            QJsonDocument doc = QJsonDocument::fromJson(process.readAllStandardOutput());
+            QJsonObject result = doc.object();
+            QJsonArray items = result.value("items").toArray();
+            
+            for (const auto& item : items) {
+                QJsonObject deployment = item.toObject();
+                QJsonObject metadata = deployment.value("metadata").toObject();
+                QString name = metadata.value("name").toString();
+                
+                QJsonObject status = deployment.value("status").toObject();
+                int readyReplicas = status.value("readyReplicas").toInt();
+                
+                if (readyReplicas > 0) {
+                    runningApps.append(name);
+                }
+            }
+        }
+        
+        return runningApps;
+    });
+}
+
+bool K8sDockerRuntime::supportsApp(const AppMetadata& app) const {
+    // Check if the app has Kubernetes/Docker configuration
+    QJsonObject dashboardConfig = app.extendedProperties.value("dashboardConfig").toObject();
+    return !dashboardConfig.value("DockerImageURL").toString().isEmpty();
+}
+
+//------------------------------------------------------------------------------
+// HttpMarketplaceRepository Implementation
+//------------------------------------------------------------------------------
+
+HttpMarketplaceRepository::HttpMarketplaceRepository(const QString& baseUrl, QObject* parent)
+    : IAppRepository(parent)
+    , m_baseUrl(baseUrl)
+    , m_networkManager(new QNetworkAccessManager(this))
+{
+    // Extract name from URL
+    QUrl url(baseUrl);
+    m_name = url.host();
+}
+
+QFuture<QList<AppMetadata>> HttpMarketplaceRepository::searchApps(
+    const QString& query, const QString& category, int page, int limit) {
+    
+    return QtConcurrent::run([this, query, category, page, limit]() -> QList<AppMetadata> {
+        QUrl url(m_baseUrl + "/package");
+        QUrlQuery urlQuery;
+        urlQuery.addQueryItem("page", QString::number(page));
+        urlQuery.addQueryItem("limit", QString::number(limit));
+        if (!category.isEmpty()) {
+            urlQuery.addQueryItem("category", category);
+        }
+        if (!query.isEmpty()) {
+            urlQuery.addQueryItem("search", query);
+        }
+        url.setQuery(urlQuery);
+        
+        QNetworkRequest request(url);
+        if (!m_authToken.isEmpty()) {
+            request.setRawHeader("Authorization", ("Bearer " + m_authToken).toUtf8());
+        }
+        
+        QEventLoop loop;
+        QNetworkReply* reply = m_networkManager->get(request);
+        QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+        loop.exec();
+        
+        QList<AppMetadata> apps;
+        
+        if (reply->error() == QNetworkReply::NoError) {
+            QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+            QJsonObject response = doc.object();
+            QJsonArray data = response.value("data").toArray();
+            
+            for (const auto& item : data) {
+                if (item.isObject()) {
+                    apps.append(AppMetadata::fromJson(item.toObject()));
+                }
+            }
+        } else {
+            emit error("Network error: " + reply->errorString());
+        }
+        
+        reply->deleteLater();
+        return apps;
+    });
+}
+
+QFuture<AppMetadata> HttpMarketplaceRepository::getAppDetails(const QString& appId) {
+    return QtConcurrent::run([this, appId]() -> AppMetadata {
+        QUrl url(m_baseUrl + "/package/" + appId);
+        QNetworkRequest request(url);
+        if (!m_authToken.isEmpty()) {
+            request.setRawHeader("Authorization", ("Bearer " + m_authToken).toUtf8());
+        }
+        
+        QEventLoop loop;
+        QNetworkReply* reply = m_networkManager->get(request);
+        QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+        loop.exec();
+        
+        AppMetadata metadata;
+        
+        if (reply->error() == QNetworkReply::NoError) {
+            QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+            if (doc.isObject()) {
+                metadata = AppMetadata::fromJson(doc.object());
+            }
+        } else {
+            emit error("Failed to get app details: " + reply->errorString());
+        }
+        
+        reply->deleteLater();
+        return metadata;
+    });
+}
+
+QFuture<QByteArray> HttpMarketplaceRepository::downloadAppPackage(const QString& appId) {
+    return QtConcurrent::run([this, appId]() -> QByteArray {
+        QUrl url(m_baseUrl + "/package/" + appId + "/download");
+        QNetworkRequest request(url);
+        if (!m_authToken.isEmpty()) {
+            request.setRawHeader("Authorization", ("Bearer " + m_authToken).toUtf8());
+        }
+        
+        QEventLoop loop;
+        QNetworkReply* reply = m_networkManager->get(request);
+        
+        // Connect progress signal
+        QObject::connect(reply, &QNetworkReply::downloadProgress,
+                         [this, appId](qint64 received, qint64 total) {
+            if (total > 0) {
+                int percentage = (received * 100) / total;
+                emit downloadProgress(appId, percentage);
+            }
+        });
+        
+        QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+        loop.exec();
+        
+        QByteArray data;
+        
+        if (reply->error() == QNetworkReply::NoError) {
+            data = reply->readAll();
+        } else {
+            emit error("Download failed: " + reply->errorString());
+        }
+        
+        reply->deleteLater();
+        return data;
+    });
+}
+
+QFuture<bool> HttpMarketplaceRepository::authenticate(const QString& username, const QString& password) {
+    return QtConcurrent::run([this, username, password]() -> bool {
+        if (m_loginUrl.isEmpty()) {
+            return true; // No authentication required
+        }
+        
+        QUrl url(m_loginUrl);
+        QNetworkRequest request(url);
+        request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+        
+        QJsonObject loginData;
+        loginData["email"] = username;
+        loginData["password"] = password;
+        
+        QEventLoop loop;
+        QNetworkReply* reply = m_networkManager->post(request, QJsonDocument(loginData).toJson());
+        QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+        loop.exec();
+        
+        bool success = false;
+        
+        if (reply->error() == QNetworkReply::NoError) {
+            QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+            QJsonObject response = doc.object();
+            m_authToken = response.value("token").toString();
+            success = !m_authToken.isEmpty();
+        } else {
+            emit error("Authentication failed: " + reply->errorString());
+        }
+        
+        reply->deleteLater();
+        return success;
+    });
+}
+
+//------------------------------------------------------------------------------
+// JsonConfigurationProvider Implementation
+//------------------------------------------------------------------------------
+
+JsonConfigurationProvider::JsonConfigurationProvider(const QString& configPath, QObject* parent)
+    : IConfigurationProvider(parent), m_configPath(configPath)
+{
+    loadConfiguration();
+}
+
+QVariant JsonConfigurationProvider::getValue(const QString& key, const QVariant& defaultValue) const {
+    QStringList keyParts = key.split('.');
+    QJsonValue value = m_config;
+    
+    for (const QString& part : keyParts) {
+        if (value.isObject()) {
+            value = value.toObject().value(part);
+        } else {
+            return defaultValue;
+        }
+    }
+    
+    return value.toVariant();
+}
+
+void JsonConfigurationProvider::setValue(const QString& key, const QVariant& value) {
+    QStringList keyParts = key.split('.');
+    QJsonObject* current = &m_config;
+    
+    for (int i = 0; i < keyParts.size() - 1; ++i) {
+        const QString& part = keyParts[i];
+        if (!current->contains(part) || !(*current)[part].isObject()) {
+            (*current)[part] = QJsonObject();
+        }
+        current = &(*current)[part].toObject();
+    }
+    
+    (*current)[keyParts.last()] = QJsonValue::fromVariant(value);
+    
+    saveConfiguration();
+    emit configurationChanged(key, value);
+}
+
+QStringList JsonConfigurationProvider::getCategories() const {
+    QJsonArray categories = m_config.value("categories").toArray();
+    QStringList result;
+    for (const auto& category : categories) {
+        result.append(category.toString());
+    }
+    return result;
+}
+
+QString JsonConfigurationProvider::getInstallPath() const {
+    return getValue("paths.install", QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/apps").toString();
+}
+
+QString JsonConfigurationProvider::getCachePath() const {
+    return getValue("paths.cache", QStandardPaths::writableLocation(QStandardPaths::CacheLocation)).toString();
+}
+
+void JsonConfigurationProvider::loadConfiguration() {
+    QFile file(m_configPath);
+    if (file.exists() && file.open(QIODevice::ReadOnly)) {
+        QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+        if (doc.isObject()) {
+            m_config = doc.object();
+        }
+        file.close();
+    } else {
+        // Create default configuration
+        m_config = QJsonObject{
+            {"categories", QJsonArray{"vehicle", "vehicle-service"}},
+            {"paths", QJsonObject{
+                {"install", QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/apps"},
+                {"cache", QStandardPaths::writableLocation(QStandardPaths::CacheLocation)}
+            }},
+            {"repositories", QJsonArray{
+                QJsonObject{
+                    {"name", "Default Marketplace"},
+                    {"url", "https://store-be.digitalauto.tech"},
+                    {"loginUrl", ""}
+                }
+            }}
+        };
+        saveConfiguration();
+    }
+}
+
+void JsonConfigurationProvider::saveConfiguration() {
+    QFileInfo fileInfo(m_configPath);
+    QDir().mkpath(fileInfo.path());
+    
+    QFile file(m_configPath);
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(QJsonDocument(m_config).toJson());
+        file.close();
+    }
+}
+
+//------------------------------------------------------------------------------
+// AppManagerFactory Implementation
+//------------------------------------------------------------------------------
+
+std::unique_ptr<ApplicationManager> AppManagerFactory::createManager(
+    const QString& platform, const QString& configPath) {
+    
+    auto manager = std::make_unique<ApplicationManager>();
+    
+    // Create configuration provider
+    auto config = createConfigProvider("json", configPath.isEmpty() ? 
+        QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + "/appmanager.json" : configPath);
+    
+    // Create components based on platform
+    QString actualPlatform = platform;
+    if (actualPlatform == "auto") {
+        // Auto-detect platform
+        #ifdef Q_OS_LINUX
+        actualPlatform = "kubernetes";
+        #else
+        actualPlatform = "local";
+        #endif
+    }
+    
+    // Create repository
+    QVariantMap repoConfig;
+    repoConfig["url"] = config->getValue("repositories.0.url", "https://store-be.digitalauto.tech");
+    repoConfig["loginUrl"] = config->getValue("repositories.0.loginUrl", "");
+    auto repository = createRepository("http", repoConfig);
+    
+    // Create installer and runtime
+    auto installer = createInstaller(actualPlatform, config.get());
+    auto runtime = createRuntime(actualPlatform, config.get());
+    
+    // Set components
+    manager->setRepository(std::move(repository));
+    manager->setInstaller(std::move(installer));
+    manager->setRuntime(std::move(runtime));
+    manager->setConfigurationProvider(std::move(config));
+    
+    return manager;
+}
+
+std::unique_ptr<IAppRepository> AppManagerFactory::createRepository(
+    const QString& type, const QVariantMap& config) {
+    
+    if (type == "http") {
+        QString url = config.value("url").toString();
+        auto repo = std::make_unique<HttpMarketplaceRepository>(url);
+        return std::move(repo);
+    }
+    
+    return nullptr;
+}
+
+std::unique_ptr<IAppInstaller> AppManagerFactory::createInstaller(
+    const QString& type, IConfigurationProvider* config) {
+    
+    if (type == "kubernetes" || type == "k8s") {
+        return std::make_unique<K8sDockerInstaller>(config);
+    }
+    
+    return nullptr;
+}
+
+std::unique_ptr<IAppRuntime> AppManagerFactory::createRuntime(
+    const QString& type, IConfigurationProvider* config) {
+    
+    if (type == "kubernetes" || type == "k8s") {
+        return std::make_unique<K8sDockerRuntime>(config);
+    }
+    
+    return nullptr;
+}
+
+std::unique_ptr<IConfigurationProvider> AppManagerFactory::createConfigProvider(
+    const QString& type, const QString& configPath) {
+    
+    if (type == "json") {
+        return std::make_unique<JsonConfigurationProvider>(configPath);
+    }
+    
+    return nullptr;
+}
+
+} // namespace AppManager

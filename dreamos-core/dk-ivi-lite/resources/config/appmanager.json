@@ -1,0 +1,53 @@
+{
+    "categories": [
+        "vehicle",
+        "vehicle-service",
+        "utility",
+        "entertainment",
+        "development"
+    ],
+    "paths": {
+        "install": "/opt/apps",
+        "cache": "/var/cache/appmanager",
+        "temp": "/tmp/appmanager"
+    },
+    "repositories": [
+        {
+            "name": "Primary Marketplace",
+            "url": "https://store-be.digitalauto.tech",
+            "loginUrl": "https://store-be.digitalauto.tech/auth/login",
+            "type": "http",
+            "enabled": true
+        },
+        {
+            "name": "Secondary Store",
+            "url": "https://apps.example.com",
+            "loginUrl": "",
+            "type": "http",
+            "enabled": false
+        }
+    ],
+    "installer": {
+        "type": "kubernetes",
+        "config": {
+            "namespace": "default",
+            "nodeSelector": {
+                "kubernetes.io/hostname": "xip"
+            },
+            "pullPolicy": "Always",
+            "timeoutSeconds": 300
+        }
+    },
+    "runtime": {
+        "type": "kubernetes",
+        "config": {
+            "healthCheckInterval": 5000,
+            "restartPolicy": "Always"
+        }
+    },
+    "tracking": {
+        "installedAppsFile": "/var/lib/appmanager/installed.json",
+        "logLevel": "info",
+        "enableMetrics": true
+    }
+}

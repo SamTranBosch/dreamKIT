@@ -1,0 +1,734 @@
+# CMakeLists.txt for Abstract Application Manager
+cmake_minimum_required(VERSION 3.16)
+
+project(AbstractAppManager VERSION 1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_AUTOMOC ON)
+
+# Find required Qt components
+find_package(Qt6 6.2 REQUIRED COMPONENTS 
+    Core 
+    Quick 
+    Network 
+    Concurrent
+)
+
+# Library target for the abstract framework
+add_library(AppManagerFramework STATIC
+    # Core interfaces
+    src/core/applicationmanager.h
+    src/core/applicationmanager.cpp
+    src/core/interfaces.h
+    
+    # Concrete implementations
+    src/implementations/k8sdockerinstaller.h
+    src/implementations/k8sdockerinstaller.cpp
+    src/implementations/k8sdockerruntime.h
+    src/implementations/k8sdockerruntime.cpp
+    src/implementations/httpmarketplacerepository.h
+    src/implementations/httpmarketplacerepository.cpp
+    src/implementations/jsonconfigurationprovider.h
+    src/implementations/jsonconfigurationprovider.cpp
+    
+    # Factory and plugin system
+    src/factory/appmanagerfactory.h
+    src/factory/appmanagerfactory.cpp
+    src/plugins/pluginmanager.h
+    src/plugins/pluginmanager.cpp
+    
+    # Models for QML
+    src/models/applistmodel.h
+    src/models/applistmodel.cpp
+)
+
+target_link_libraries(AppManagerFramework
+    Qt6::Core
+    Qt6::Network
+    Qt6::Concurrent
+)
+
+target_include_directories(AppManagerFramework PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+    $<INSTALL_INTERFACE:include>
+)
+
+# QML module for the framework
+qt6_add_qml_module(AppManagerFramework
+    URI AppManager
+    VERSION 1.0
+    SOURCES
+        src/core/applicationmanager.h
+        src/core/applicationmanager.cpp
+        src/models/applistmodel.h
+        src/models/applistmodel.cpp
+    QML_FILES
+        qml/AppManagerView.qml
+        qml/MarketplaceView.qml
+        qml/InstalledAppsView.qml
+        qml/AppCard.qml
+        qml/InstalledAppCard.qml
+)
+
+# Example application using the framework
+add_executable(AppManagerExample
+    examples/main.cpp
+)
+
+qt6_add_qml_module(AppManagerExample
+    URI AppManagerExample
+    VERSION 1.0
+    QML_FILES
+        examples/main.qml
+        examples/CustomAppCard.qml
+)
+
+target_link_libraries(AppManagerExample
+    Qt6::Core
+    Qt6::Quick
+    AppManagerFramework
+)
+
+# Platform-specific plugins
+
+# Kubernetes plugin
+add_library(KubernetesPlugin SHARED
+    plugins/kubernetes/kubernetesplugin.h
+    plugins/kubernetes/kubernetesplugin.cpp
+    plugins/kubernetes/k8sinstaller.h
+    plugins/kubernetes/k8sinstaller.cpp
+    plugins/kubernetes/k8sruntime.h
+    plugins/kubernetes/k8sruntime.cpp
+)
+
+target_link_libraries(KubernetesPlugin
+    Qt6::Core
+    AppManagerFramework
+)
+
+# Docker plugin
+add_library(DockerPlugin SHARED
+    plugins/docker/dockerplugin.h
+    plugins/docker/dockerplugin.cpp
+    plugins/docker/dockerinstaller.h
+    plugins/docker/dockerinstaller.cpp
+    plugins/docker/dockerruntime.h
+    plugins/docker/dockerruntime.cpp
+)
+
+target_link_libraries(DockerPlugin
+    Qt6::Core
+    AppManagerFramework
+)
+
+# Local filesystem plugin (for development/testing)
+add_library(LocalPlugin SHARED
+    plugins/local/localplugin.h
+    plugins/local/localplugin.cpp
+    plugins/local/localinstaller.h
+    plugins/local/localinstaller.cpp
+    plugins/local/localruntime.h
+    plugins/local/localruntime.cpp
+)
+
+target_link_libraries(LocalPlugin
+    Qt6::Core
+    AppManagerFramework
+)
+
+# Install targets
+install(TARGETS AppManagerFramework
+    EXPORT AppManagerFrameworkTargets
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+    RUNTIME DESTINATION bin
+    INCLUDES DESTINATION include
+)
+
+install(DIRECTORY src/
+    DESTINATION include/AppManager
+    FILES_MATCHING PATTERN "*.h"
+)
+
+install(EXPORT AppManagerFrameworkTargets
+    FILE AppManagerFrameworkTargets.cmake
+    NAMESPACE AppManager::
+    DESTINATION lib/cmake/AppManagerFramework
+)
+
+# Package configuration
+include(CMakePackageConfigHelpers)
+write_basic_package_version_file(
+    AppManagerFrameworkConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY AnyNewerVersion
+)
+
+configure_package_config_file(
+    AppManagerFrameworkConfig.cmake.in
+    AppManagerFrameworkConfig.cmake
+    INSTALL_DESTINATION lib/cmake/AppManagerFramework
+)
+
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/AppManagerFrameworkConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/AppManagerFrameworkConfigVersion.cmake
+    DESTINATION lib/cmake/AppManagerFramework
+)
+
+# Testing
+enable_testing()
+find_package(Qt6 COMPONENTS Test)
+
+if(Qt6Test_FOUND)
+    add_subdirectory(tests)
+endif()
+
+# Documentation
+find_package(Doxygen)
+if(DOXYGEN_FOUND)
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile.in ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile @ONLY)
+    add_custom_target(doc
+        ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        COMMENT "Generating API documentation with Doxygen" VERBATIM
+    )
+endif()
+
+# AppManagerFrameworkConfig.cmake.in
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Qt6 COMPONENTS Core Network Concurrent)
+
+include("${CMAKE_CURRENT_LIST_DIR}/AppManagerFrameworkTargets.cmake")
+
+check_required_components(AppManagerFramework)
+
+# examples/main.cpp - Example usage
+#include <QGuiApplication>
+#include <QQmlApplicationEngine>
+#include <QQmlContext>
+#include <QDir>
+
+#include "applicationmanager.h"
+#include "appmanagerfactory.h"
+
+int main(int argc, char *argv[])
+{
+    QGuiApplication app(argc, argv);
+    
+    // Register QML types
+    qmlRegisterType<AppManager::ApplicationManager>("AppManager", 1, 0, "ApplicationManager");
+    qmlRegisterType<AppManager::AppListModel>("AppManager", 1, 0, "AppListModel");
+    qmlRegisterUncreatableType<AppManager::AppStatus>("AppManager", 1, 0, "AppStatus", "Enum type");
+    
+    // Create application manager with auto-detected platform
+    auto appManager = AppManager::AppManagerFactory::createManager("auto", "");
+    
+    QQmlApplicationEngine engine;
+    
+    // Expose the manager to QML
+    engine.rootContext()->setContextProperty("appManagerInstance", appManager.get());
+    
+    // Load main QML file
+    const QUrl url(QStringLiteral("qrc:/AppManagerExample/examples/main.qml"));
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
+                     &app, [url](QObject *obj, const QUrl &objUrl) {
+        if (!obj && url == objUrl)
+            QCoreApplication::exit(-1);
+    }, Qt::QueuedConnection);
+    
+    engine.load(url);
+    
+    return app.exec();
+}
+
+// examples/main.qml - Example QML usage
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Window 2.15
+import AppManager 1.0
+
+ApplicationWindow {
+    id: window
+    width: 1200
+    height: 800
+    visible: true
+    title: "App Manager Example"
+    
+    // Use the framework's main component
+    AppManagerView {
+        anchors.fill: parent
+        
+        // You can customize the app manager if needed
+        Component.onCompleted: {
+            // Auto-search on startup
+            appManager.searchApps("", "vehicle")
+        }
+    }
+}
+
+// examples/CustomAppCard.qml - Example of customizing components
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import AppManager 1.0
+
+// Extend the base AppCard with custom styling
+AppCard {
+    id: customCard
+    
+    // Custom properties
+    property color accentColor: "#FF6B35"
+    property bool showBadge: true
+    
+    // Override the border color
+    border.color: mouseArea.containsMouse ? accentColor : "#404040"
+    
+    // Add custom badge
+    Rectangle {
+        visible: showBadge && customCard.isInstalled
+        width: 60
+        height: 20
+        radius: 10
+        color: accentColor
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.margins: 8
+        
+        Text {
+            anchors.centerIn: parent
+            text: "NEW"
+            color: "white"
+            font.pixelSize: 10
+            font.bold: true
+        }
+    }
+}
+
+// config/appmanager.json - Example configuration file
+{
+    "categories": [
+        "vehicle",
+        "vehicle-service",
+        "utility",
+        "entertainment",
+        "development"
+    ],
+    "paths": {
+        "install": "/opt/apps",
+        "cache": "/var/cache/appmanager",
+        "temp": "/tmp/appmanager"
+    },
+    "repositories": [
+        {
+            "name": "Primary Marketplace",
+            "url": "https://store-be.digitalauto.tech",
+            "loginUrl": "https://store-be.digitalauto.tech/auth/login",
+            "type": "http",
+            "enabled": true
+        },
+        {
+            "name": "Secondary Store",
+            "url": "https://apps.example.com",
+            "loginUrl": "",
+            "type": "http",
+            "enabled": false
+        }
+    ],
+    "installer": {
+        "type": "kubernetes",
+        "config": {
+            "namespace": "default",
+            "nodeSelector": {
+                "kubernetes.io/hostname": "xip"
+            },
+            "pullPolicy": "Always",
+            "timeoutSeconds": 300
+        }
+    },
+    "runtime": {
+        "type": "kubernetes",
+        "config": {
+            "healthCheckInterval": 5000,
+            "restartPolicy": "Always"
+        }
+    },
+    "tracking": {
+        "installedAppsFile": "/var/lib/appmanager/installed.json",
+        "logLevel": "info",
+        "enableMetrics": true
+    }
+}
+
+// Usage Examples in Different Projects:
+
+// 1. Automotive IVI System
+/*
+#include "applicationmanager.h"
+#include "appmanagerfactory.h"
+
+// In your IVI main application
+auto appManager = AppManager::AppManagerFactory::createManager("kubernetes", "/etc/ivi/appmanager.json");
+
+// Customize for automotive use
+appManager->searchApps("", "vehicle");
+
+// Connect to vehicle signals
+connect(vehicleInterface, &VehicleInterface::ignitionOn, 
+        appManager.get(), &ApplicationManager::refreshInstalledApps);
+*/
+
+// 2. Edge Computing Platform
+/*
+#include "applicationmanager.h"
+
+// Create custom installer for edge deployment
+class EdgeInstaller : public AppManager::IAppInstaller {
+    // Implementation for edge-specific deployment
+};
+
+auto manager = std::make_unique<AppManager::ApplicationManager>();
+manager->setInstaller(std::make_unique<EdgeInstaller>());
+*/
+
+// 3. IoT Device Manager
+/*
+// Use local file system installer for IoT devices
+auto appManager = AppManager::AppManagerFactory::createManager("local", "/etc/iot/apps.json");
+
+// Search for IoT-specific applications
+appManager->searchApps("sensor", "iot");
+*/
+
+// 4. Plugin Development Example
+/*
+// plugins/custom/customplugin.h
+#pragma once
+#include "interfaces.h"
+#include <QtPlugin>
+
+class CustomPlugin : public AppManager::IAppManagerPlugin {
+    Q_OBJECT
+    Q_PLUGIN_METADATA(IID AppManagerPlugin_IID)
+    Q_INTERFACES(AppManager::IAppManagerPlugin)
+
+public:
+    QString pluginName() const override { return "CustomPlugin"; }
+    QString pluginVersion() const override { return "1.0.0"; }
+    QStringList supportedTypes() const override { 
+        return {"custom-installer", "custom-runtime", "custom-repository"}; 
+    }
+    
+    std::unique_ptr<AppManager::IAppInstaller> createInstaller(
+        AppManager::IConfigurationProvider* config) override {
+        return std::make_unique<CustomInstaller>(config);
+    }
+    
+    std::unique_ptr<AppManager::IAppRuntime> createRuntime(
+        AppManager::IConfigurationProvider* config) override {
+        return std::make_unique<CustomRuntime>(config);
+    }
+};
+*/
+
+// Migration Guide from Original Code:
+
+/*
+STEP 1: Replace existing marketplace code
+
+// OLD CODE:
+// MarketplaceViewModel* vm;
+// vm->search("vehicle");
+
+// NEW CODE:
+auto appManager = AppManager::AppManagerFactory::createManager();
+appManager->searchApps("", "vehicle");
+
+STEP 2: Update QML files
+
+// OLD QML:
+// MarketplaceViewModel { id: vm }
+// AppGrid { modelData: vm.appsModel }
+
+// NEW QML:
+import AppManager 1.0
+ApplicationManager { id: appManager }
+AppListModel { id: availableApps; source: appManager.availableApps }
+
+STEP 3: Migrate installation logic
+
+// OLD CODE (scattered across multiple files):
+// m_installer->start("kubectl", args);
+// DataManager::saveAppConfig(app, folder);
+// Various YAML generation code
+
+// NEW CODE (single interface):
+appManager->installApp(appId);  // Everything handled internally
+
+STEP 4: Replace custom models
+
+// OLD CODE:
+class VappsAsync : public QObject {
+    // Custom implementation with tight coupling
+};
+
+// NEW CODE:
+// Use provided AppListModel or extend it:
+class CustomAppListModel : public AppManager::AppListModel {
+    // Add custom functionality while maintaining compatibility
+};
+
+STEP 5: Configuration migration
+
+// OLD CODE:
+extern QString DK_CONTAINER_ROOT;
+extern QString DK_INSTALLED_APPS_FOLDER;
+// Hard-coded paths and settings
+
+// NEW CODE:
+// Everything configurable via JSON:
+{
+    "paths": {
+        "install": "/path/to/apps",
+        "cache": "/path/to/cache"
+    },
+    "installer": {
+        "type": "kubernetes"
+    }
+}
+*/
+
+// Advanced Usage Examples:
+
+// 1. Custom Repository Implementation
+/*
+class GitHubRepository : public AppManager::IAppRepository {
+    Q_OBJECT
+    
+public:
+    GitHubRepository(const QString& baseUrl, QObject* parent = nullptr)
+        : IAppRepository(parent), m_baseUrl(baseUrl) {}
+    
+    QFuture<QList<AppManager::AppMetadata>> searchApps(
+        const QString& query, const QString& category, int page, int limit) override {
+        
+        return QtConcurrent::run([this, query, category, page, limit]() {
+            // Implementation for GitHub releases API
+            QList<AppManager::AppMetadata> apps;
+            
+            // Fetch from GitHub API
+            QUrl url(m_baseUrl + "/search/repositories");
+            QUrlQuery urlQuery;
+            urlQuery.addQueryItem("q", query + " topic:" + category);
+            urlQuery.addQueryItem("per_page", QString::number(limit));
+            urlQuery.addQueryItem("page", QString::number(page));
+            url.setQuery(urlQuery);
+            
+            // Process GitHub response and convert to AppMetadata
+            // ... implementation details
+            
+            return apps;
+        });
+    }
+    
+private:
+    QString m_baseUrl;
+};
+
+// Register the custom repository
+auto customRepo = std::make_unique<GitHubRepository>("https://api.github.com");
+appManager->setRepository(std::move(customRepo));
+*/
+
+// 2. Custom Installer for Different Platforms
+/*
+class FlatpakInstaller : public AppManager::IAppInstaller {
+    Q_OBJECT
+    
+public:
+    QFuture<bool> installApp(const AppManager::AppMetadata& app, 
+                           const QByteArray& packageData) override {
+        return QtConcurrent::run([this, app, packageData]() {
+            emit installStarted(app.id);
+            
+            // Use Flatpak commands instead of kubectl
+            QProcess flatpak;
+            flatpak.start("flatpak", QStringList{
+                "install", "--user", "--noninteractive", app.packageLink
+            });
+            
+            if (!flatpak.waitForFinished(300000)) {
+                emit error(app.id, "Installation timeout");
+                return false;
+            }
+            
+            bool success = (flatpak.exitCode() == 0);
+            emit installCompleted(app.id, success);
+            return success;
+        });
+    }
+    
+    QString installerType() const override { return "flatpak"; }
+    QStringList supportedPlatforms() const override { return {"linux"}; }
+};
+*/
+
+// 3. Integration with Existing Systems
+/*
+// For integrating with existing IVI frameworks
+class IVIApplicationManager : public QObject {
+    Q_OBJECT
+    
+public:
+    IVIApplicationManager(QObject* parent = nullptr) : QObject(parent) {
+        // Initialize the abstract app manager
+        m_appManager = AppManager::AppManagerFactory::createManager("kubernetes");
+        
+        // Connect to existing IVI signals
+        connect(m_appManager.get(), &AppManager::ApplicationManager::appInstalled,
+                this, &IVIApplicationManager::onAppInstalled);
+        
+        // Expose to existing QML context
+        m_qmlEngine->rootContext()->setContextProperty("appManager", m_appManager.get());
+    }
+    
+    // Bridge methods for existing APIs
+    Q_INVOKABLE void installVehicleApp(const QString& appId) {
+        m_appManager->installApp(appId);
+    }
+    
+    Q_INVOKABLE void startVehicleService(const QString& serviceId) {
+        m_appManager->startApp(serviceId);
+    }
+    
+private slots:
+    void onAppInstalled(const QString& appId, bool success) {
+        // Notify existing IVI systems
+        emit vehicleAppInstalled(appId, success);
+        
+        // Update vehicle display
+        updateVehicleHMI();
+    }
+    
+signals:
+    void vehicleAppInstalled(const QString& appId, bool success);
+    
+private:
+    std::unique_ptr<AppManager::ApplicationManager> m_appManager;
+    QQmlApplicationEngine* m_qmlEngine;
+    
+    void updateVehicleHMI() {
+        // Update existing HMI elements
+    }
+};
+*/
+
+// 4. Testing Framework Integration
+/*
+// tests/test_appmanager.cpp
+#include <QtTest>
+#include <QSignalSpy>
+#include "applicationmanager.h"
+#include "appmanagerfactory.h"
+
+class TestAppManager : public QObject {
+    Q_OBJECT
+    
+private slots:
+    void initTestCase() {
+        // Create test manager with mock implementations
+        m_manager = AppManager::AppManagerFactory::createManager("local", ":/test/config.json");
+    }
+    
+    void testAppSearch() {
+        QSignalSpy searchSpy(m_manager.get(), &AppManager::ApplicationManager::isLoadingChanged);
+        
+        m_manager->searchApps("test", "vehicle");
+        
+        QVERIFY(searchSpy.wait(5000));
+        QCOMPARE(m_manager->availableAppsModel()->rowCount(), 5); // Expected test apps
+    }
+    
+    void testAppInstallation() {
+        QSignalSpy installSpy(m_manager.get(), &AppManager::ApplicationManager::appInstalled);
+        
+        m_manager->installApp("test-app-id");
+        
+        QVERIFY(installSpy.wait(10000));
+        QList<QVariant> arguments = installSpy.takeFirst();
+        QCOMPARE(arguments.at(0).toString(), QString("test-app-id"));
+        QCOMPARE(arguments.at(1).toBool(), true);
+    }
+    
+    void testAppRuntime() {
+        // Install app first
+        m_manager->installApp("test-runtime-app");
+        QSignalSpy installSpy(m_manager.get(), &AppManager::ApplicationManager::appInstalled);
+        QVERIFY(installSpy.wait(10000));
+        
+        // Test start
+        QSignalSpy startSpy(m_manager.get(), &AppManager::ApplicationManager::appStarted);
+        m_manager->startApp("test-runtime-app");
+        QVERIFY(startSpy.wait(5000));
+        
+        // Test stop
+        QSignalSpy stopSpy(m_manager.get(), &AppManager::ApplicationManager::appStopped);
+        m_manager->stopApp("test-runtime-app");
+        QVERIFY(stopSpy.wait(5000));
+    }
+    
+private:
+    std::unique_ptr<AppManager::ApplicationManager> m_manager;
+};
+
+QTEST_MAIN(TestAppManager)
+#include "test_appmanager.moc"
+*/
+
+// 5. Documentation and API Examples
+/*
+API Documentation Structure:
+
+AppManager Framework
+├── Core Interfaces
+│   ├── IAppRepository - Abstract app source (marketplace, file system, etc.)
+│   ├── IAppInstaller - Abstract installation mechanism (k8s, docker, local, etc.)
+│   ├── IAppRuntime - Abstract execution environment
+│   └── IConfigurationProvider - Abstract configuration management
+├── Concrete Implementations
+│   ├── HttpMarketplaceRepository - HTTP-based app marketplace
+│   ├── K8sDockerInstaller - Kubernetes/Docker installation
+│   ├── K8sDockerRuntime - Kubernetes/Docker runtime
+│   └── JsonConfigurationProvider - JSON-based configuration
+├── Models & UI
+│   ├── ApplicationManager - Main orchestrator
+│   ├── AppListModel - QML-compatible app list
+│   └── QML Components - Ready-to-use UI components
+├── Factory & Plugins
+│   ├── AppManagerFactory - Create configured instances
+│   └── Plugin System - Load platform-specific implementations
+└── Examples & Tests
+    ├── Vehicle IVI Example
+    ├── Edge Computing Example
+    └── Comprehensive Test Suite
+
+Key Benefits of This Architecture:
+
+1. ABSTRACTION: Clean interfaces separate concerns
+2. PLUGGABILITY: Easy to swap implementations
+3. TESTABILITY: Mock implementations for testing
+4. REUSABILITY: Framework works across different domains
+5. MAINTAINABILITY: Clear separation of responsibilities
+6. EXTENSIBILITY: Plugin system for custom implementations
+7. CONFIGURABILITY: JSON-based configuration
+8. QML INTEGRATION: Native Qt/QML support
+
+Migration Path:
+1. Replace existing tightly-coupled code with framework interfaces
+2. Configure implementations via JSON instead of hard-coded values
+3. Use provided QML components or extend them
+4. Implement custom plugins for specific requirements
+5. Test with provided mock implementations
+*/
