@@ -13,6 +13,7 @@
 #include "k3s/manifestbuilder.hpp"
 #include "k3s/installer.hpp"
 
+using namespace Async;
 using K3s::ManifestBuilder;
 using K3s::Installer;
 
@@ -192,57 +193,63 @@ void MarketplaceViewModel::setCurrentCategory(int idx) {
     search(m_lastSearchTerm);
 }
 
+/* ─────────────────────────────────────────────────────────── */
+/*  Asynchronous search                                       */
+/* ─────────────────────────────────────────────────────────── */
 void MarketplaceViewModel::search(const QString &term)
 {
-    // pick a default term
+    // keep the filter text
     m_lastSearchTerm = term.isEmpty()
                      ? QStringLiteral("vehicle")
                      : term;
-    m_apps->updateApps({});  // clear
 
-    // 1) build FetchOptions
+    // clear list immediately so UI reacts
+    m_apps->updateApps({});
+
+    // --- build FetchOptions --------------------------------
     DataManager::FetchOptions opt;
-    QModelIndex mi = m_cats->index(m_currentCategory,0);
-    opt.marketUrl  = m_cats->data(mi, CategoryListModel::UrlRole).toString();
-    opt.loginUrl   = m_cats->data(mi, CategoryListModel::LoginUrlRole).toString();
-    opt.username   = "";
-    opt.password   = "";
+    const QModelIndex mi = m_cats->index(m_currentCategory, 0);
+    opt.marketUrl  = m_cats->data(mi, CategoryListModel::UrlRole)      .toString();
+    opt.loginUrl   = m_cats->data(mi, CategoryListModel::LoginUrlRole) .toString();
     opt.category   = m_lastSearchTerm;
     opt.page       = 1;
     opt.limit      = 20;
     opt.rootFolder = DK_CONTAINER_ROOT + "dk_marketplace/";
 
-    // 2) fetch + parse + persist via DataManager
-    QList<AppInfo> apps = DataManager::fetchAppList(opt);
-    if (apps.isEmpty()) {
-        // show error / return
-        qDebug() << "DataManager::fetchAppList: with apps.isEmpty()" << term;
-        return;
-    }
+    // --- run fetch in background ---------------------------
+    if (m_searchJob) m_searchJob->deleteLater();            // cancel old one
+    m_searchJob = new Job<QList<AppInfo>>(
+        [=](){ return DataManager::fetchAppList(opt); },    // runs in thread
+        this);
 
-    // 3) load the tracking file and collect installed IDs
-    if (opt.category == QLatin1String("vehicle") || opt.category == QLatin1String("vehicle-service"))
-    {
+    connect(m_searchJob, &JobBase::finished,
+            this, [this](bool ok){
+        if (!ok) { emit searchError(); return; }
+
+        const QList<AppInfo> apps = m_searchJob->result();
+        if (apps.isEmpty()) {
+            qWarning() << "[search] no result";
+            emit searchError();
+            return;
+        }
+
+        // ---------------- mark already installed ----------
+        QSet<QString> installed;
         DataManager dm;
-        QJsonArray arr = dm.load(opt.category);
-        qDebug() << "[MarketplaceViewModel::search] Loaded" << arr.size() << "installed services from";
+        const QJsonArray arr = dm.load(m_lastSearchTerm);
+        for (auto v : arr)
+            if (v.isObject())
+                installed.insert(v.toObject().value("id").toString());
 
-        QSet<QString> installedIds;
-        for (auto v : arr) {
-            if (!v.isObject()) continue;
-            installedIds.insert(v.toObject()
-                                   .value("id").toString());
-        }
-        // mark them
-        for (auto &a : apps) {
-            if (installedIds.contains(a.id))
-                a.isInstalled = true;
-        }
-    }
+        QList<AppInfo> finalList = apps;
+        for (auto &a : finalList)
+            a.isInstalled = installed.contains(a.id);
 
-    // 4) update the model and remember apps for later installs
-    m_lastApps = apps;
-    m_apps->updateApps(apps);
+        // ---------------- update model on GUI thread -------
+        m_lastApps = finalList;
+        m_apps->updateApps(finalList);
+        emit searchFinished();
+    });
 }
 
 void MarketplaceViewModel::appSelected(int idx) {
@@ -261,37 +268,89 @@ void MarketplaceViewModel::appSelected(int idx) {
     }
 }
 
+/* ─────────────────────────────────────────────────────────── */
+/*  Asynchronous (sequential) confirmInstall                  */
+/* ─────────────────────────────────────────────────────────── */
 void MarketplaceViewModel::confirmInstall()
 {
     if (!m_installPending) return;
+    const int idx = m_installingIndex;
+    const AppInfo app = m_lastApps[idx];         // copy for threads
 
-    // 
-    confirmInstallPre(m_installingIndex);
+    /* -------- build kubectl command list *later* (see below) ---- */
 
-    // 
-    const AppInfo &app = m_lastApps[m_pendingIndex];
+    if (m_installChain) m_installChain->deleteLater();
+    m_installChain = new Chain(this);
 
-    QStringList cmds;
-    cmds << QString("kubectl delete job pull-%1 --ignore-not-found").arg(app.name.toLower())
-         << QString("kubectl apply -f %1").arg(m_lastManifest.pullJobYaml)
-         << QString("kubectl wait --for=condition=complete job/pull-%1 --timeout=300s").arg(app.name.toLower())
-         << QString("kubectl delete job pull-%1 --ignore-not-found").arg(app.name.toLower());
-    if (m_lastManifest.isRemoteNode) {
-        cmds << QString("kubectl delete job mirror-%1 --ignore-not-found").arg(app.name.toLower())
-             << QString("kubectl apply -f %1").arg(m_lastManifest.mirrorJobYaml)
-             << QString("kubectl wait --for=condition=complete job/mirror-%1 --timeout=300s").arg(app.name.toLower())
-             << QString("kubectl delete job mirror-%1 --ignore-not-found").arg(app.name.toLower());
-    }
+    /* ----------------------------------------------------------- *
+     * step-0  : heavy disk-IO (worker thread)                     *
+     * ----------------------------------------------------------- */
+    m_installChain->add([this, idx](){
+        confirmInstallPre(idx);
+    });
 
-    // start kubectl pipeline
-    m_installer->queueAndRun(cmds);
+    /* ----------------------------------------------------------- *
+     * step-1  : build cmds + run kubectl in GUI thread            *
+     *           (BlockingQueuedConnection guarantees sequential)  *
+     * ----------------------------------------------------------- */
+    m_installChain->add([this, app](){
 
-    // 
-    confirmInstallPost(m_installingIndex);
+        QStringList cmds;
+        cmds  << QString("kubectl delete job pull-%1 --ignore-not-found")
+                   .arg(app.name.toLower())
+              << QString("kubectl apply -f %1")
+                   .arg(m_lastManifest.pullJobYaml)
+              << QString("kubectl wait --for=condition=complete "
+                         "job/pull-%1 --timeout=300s")
+                   .arg(app.name.toLower())
+              << QString("kubectl delete job pull-%1 --ignore-not-found")
+                   .arg(app.name.toLower());
 
-    // UI flags
-    m_installPending = false;
-    emit installPendingChanged(false);
+        if (m_lastManifest.isRemoteNode) {
+            cmds << QString("kubectl delete job mirror-%1 --ignore-not-found")
+                        .arg(app.name.toLower())
+                 << QString("kubectl apply -f %1")
+                        .arg(m_lastManifest.mirrorJobYaml)
+                 << QString("kubectl wait --for=condition=complete "
+                            "job/mirror-%1 --timeout=300s")
+                        .arg(app.name.toLower())
+                 << QString("kubectl delete job mirror-%1 --ignore-not-found")
+                        .arg(app.name.toLower());
+        }
+
+        /* --- jump to GUI thread but block until it finishes --- */
+        QMetaObject::invokeMethod(
+            qApp,                                     // target (GUI thread)
+            [this, cmds]() {
+                QEventLoop loop;
+                connect(m_installer, &K3s::Installer::finished,
+                        &loop, &QEventLoop::quit, Qt::QueuedConnection);
+                m_installer->queueAndRun(cmds);       // GUI thread safe
+                loop.exec();                          // waits for finished()
+            },
+            Qt::BlockingQueuedConnection);            // <── THIS is the trick
+    });
+
+    /* ----------------------------------------------------------- *
+     * step-2  : post update (worker thread)                       *
+     * ----------------------------------------------------------- */
+    m_installChain->add([this, idx](){
+        confirmInstallPost(idx);
+    });
+
+    /* -------------- final result ------------------------------- */
+    connect(m_installChain, &Chain::finished,
+            this, [this](bool ok){
+        m_installPending = false;
+        emit installPendingChanged(false);
+        if (ok)  emit installFinished();
+        else     emit installError();
+
+        m_installChain->deleteLater();
+        m_installChain = nullptr;
+    });
+
+    m_installChain->start();
 }
 
 void MarketplaceViewModel::confirmInstallPre(int idx)
@@ -299,7 +358,6 @@ void MarketplaceViewModel::confirmInstallPre(int idx)
     // update tracking json
     DataManager dm;
     QJsonArray arr = dm.load(m_lastSearchTerm);
-    qDebug() << "[MarketplaceViewModel::confirmInstallPre] Loaded " << m_lastSearchTerm << " installed services from";
 
     const AppInfo &app = m_lastApps[idx];
     bool exists = false;
@@ -309,7 +367,6 @@ void MarketplaceViewModel::confirmInstallPre(int idx)
 
     if (!exists) {
         m_lastManifest = ManifestBuilder::write(app);
-        qDebug() << "[MarketplaceViewModel::confirmInstallPre] emit per-app configs & YAMLs";
     }
 }
 

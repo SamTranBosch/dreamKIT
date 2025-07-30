@@ -149,7 +149,6 @@ void VsersAsync::initInstalledFromDB()
 
     DataManager dm;
     QJsonArray arr = dm.load("vehicle-service");
-    qDebug() << "[VsersAsync::initInstalledFromDB] Loaded" << arr.size() << "installed apps from";
 
     for (const auto &v : arr) {
         if (!v.isObject()) continue;
@@ -165,8 +164,6 @@ void VsersAsync::initInstalledFromDB()
         app.isSubscribed= o.value("subscribed").toBool();
         installedVappsList.append(app);
     }
-
-    qDebug() << "[VsersAsync] loaded" << installedVappsList.size();
 
     for (const auto &app : installedVappsList)
         appendServicesInfoToServicesList(
@@ -253,7 +250,6 @@ void VsersAsync::handleResults(QString appId, bool isStarted, QString msg)
 // ───────────────────────────────────────────────────────────────
 void VsersAsync::fileChanged(const QString &path)
 {
-    qDebug() << "[VsersAsync] fileChanged:" << path;
     QThread::msleep(1000);   // debounce
     initInstalledFromDB();
 }
@@ -261,30 +257,6 @@ void VsersAsync::fileChanged(const QString &path)
 // ───────────────────────────────────────────────────────────────
 // Periodic check: is the deployment up?
 // ───────────────────────────────────────────────────────────────
-// void VsersAsync::checkRunningAppSts()
-// {
-//     for (int i = 0; i < installedVappsList.size(); ++i) {
-//         const auto &app = installedVappsList[i];
-//         if (app.id.isEmpty()) {
-//             emit updateServicesRunningSts(app.id, false, i);
-//             continue;
-//         }
-
-//         const QString deployName = app.name.toLower();
-//         QString       kubectlOut;
-//         const bool ok = K3s::Installer::deploymentAvailable(deployName, 10, &kubectlOut);
-
-//         qDebug() << "[checkRunningAppSts]" << deployName
-//                  << (ok ? "AVAILABLE" : "NOT AVAILABLE")
-//                  << kubectlOut;
-//         emit updateServicesRunningSts(app.id, ok, i);
-
-//         InstalledVsersCheckThread *worker = new InstalledVsersCheckThread(this);
-//             connect(worker, &InstalledVsersCheckThread::resultReady,
-//                     this, &VsersAsync::handleResults);
-//             worker->notifyState(ok);
-//     }
-// }
 void VsersAsync::checkRunningAppSts()
 {
     for (int i = 0; i < installedVappsList.size(); ++i) {
@@ -309,13 +281,10 @@ void VsersAsync::checkRunningAppSts()
             emit updateServicesRunningSts(appId, res.available, i);
             job->deleteLater();
 
-            if (!res.available) {
-                qWarning() << "[checkRunningAppSts]" << res.output;
-            }
-            else {
-                InstalledVsersCheckThread *worker = new InstalledVsersCheckThread(this);
-                    connect(worker, &InstalledVsersCheckThread::resultReady,
-                            this, &VsersAsync::handleResults);
+            InstalledVsersCheckThread *worker = new InstalledVsersCheckThread(this);
+            if (res.available) {
+                connect(worker, &InstalledVsersCheckThread::resultReady,
+                    this, &VsersAsync::handleResults);
                     worker->notifyState(res.available);
             }
         });

@@ -27,7 +27,6 @@ QJsonArray DataManager::load(const QString &target)
         qWarning() << "DataManager::load: array expected in" << filePath;
         return {};
     }
-    qDebug() << "DataManager::load: loaded" << filePath;
     return doc.array();
 }
 

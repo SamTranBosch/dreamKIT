@@ -250,7 +250,6 @@ void VappsAsync::handleResults(QString appId, bool isStarted, QString msg)
 // ───────────────────────────────────────────────────────────────
 void VappsAsync::fileChanged(const QString &path)
 {
-    qDebug() << "[VappsAsync] fileChanged:" << path;
     QThread::msleep(1000);   // debounce
     initInstalledFromDB();
 }

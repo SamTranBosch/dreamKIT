@@ -6,6 +6,8 @@
 #include <QDir>
 
 // bring in your existing fetch helpers:
+#include "async/asyncjob.hpp"
+
 #include "core/fetching.hpp"
 #include "core/datamanager.hpp"
 
@@ -101,11 +103,19 @@ class MarketplaceViewModel : public QObject {
     void installingIndexChanged(int newIndex);
     void installPendingChanged(bool);
     void pendingAppNameChanged(const QString&);
+    // 
+    void searchFinished();
+    void searchError();
+    void installFinished();
+    void installError();
 
   private:
     AppListModel*      m_apps         = nullptr;
     CategoryListModel* m_cats         = nullptr;
     QList<AppInfo>     m_lastApps;
+
+    Async::Job<QList<AppInfo>>     *m_searchJob  = nullptr;
+    Async::Chain                   *m_installChain = nullptr;
 
     K3s::Installer      *m_installer = nullptr;
     K3s::ManifestInfo    m_lastManifest;
