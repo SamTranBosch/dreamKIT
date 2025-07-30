@@ -3,12 +3,14 @@ cmake_minimum_required(VERSION 3.16)
 project(untitled2 VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_CXX_FLAGS "-fpermissive")
 
-find_package(Qt6 6.2 REQUIRED COMPONENTS Quick)
+find_package(Qt6 6.2 REQUIRED COMPONENTS Quick Concurrent)
 
 
 qt_add_executable(dk_ivi
@@ -16,8 +18,13 @@ qt_add_executable(dk_ivi
     controls/controls.cpp
     digitalauto/digitalauto.cpp
     marketplace/marketplace.cpp
-    marketplace/datamanager.cpp
-    marketplace/fetching.cpp
+    marketplace/async/asyncjob.cpp
+    marketplace/core/datamanager.cpp
+    marketplace/core/fetching.cpp
+    marketplace/core/jsonstorage.cpp
+    marketplace/core/appserializer.cpp
+    marketplace/k3s/manifestbuilder.cpp
+    marketplace/k3s/installer.cpp
     installedservices/installedservices.cpp
     installedservices/unsafeparamcheck.cpp
     installedvapps/installedvapps.cpp
@@ -117,7 +124,7 @@ set_target_properties(KuksaClient PROPERTIES
 )
 
 target_link_libraries(dk_ivi
-    PRIVATE Qt6::Quick KuksaClient
+    PRIVATE Qt6::Quick Qt6::Concurrent KuksaClient
 )
 
 install(TARGETS dk_ivi

@@ -4,14 +4,18 @@
 #include <QObject>
 #include <QTextStream>
 #include <QFile>
-#include "QString"
+#include <QString>
 #include <QThread>
 #include <QList>
 #include <QFileSystemWatcher>
 #include <QTimer>
 #include <QProcess>
 
-typedef struct {
+// ───────────────────────────────────────────────────────────────
+// Simple DTO used by the QML ListView
+// ───────────────────────────────────────────────────────────────
+struct VappsListStruct
+{
     QString id;
     QString category;
     QString name;
@@ -21,65 +25,74 @@ typedef struct {
     QString iconPath;
     QString foldername;
     QString packagelink;
-    bool isInstalled;
-    bool isSubscribed;
-} VappsListStruct;
+    bool    isInstalled = false;
+    bool    isSubscribed = false;
+};
 
-
+// ───────────────────────────────────────────────────────────────
+// Forward decl
+// ───────────────────────────────────────────────────────────────
 class VappsAsync;
 
+// ───────────────────────────────────────────────────────────────
+// Helper thread that watches docker-ps (unchanged behaviour)
+// ───────────────────────────────────────────────────────────────
 class InstalledVappsCheckThread : public QThread
 {
     Q_OBJECT
-
 public:
-    InstalledVappsCheckThread(VappsAsync *parent);
-    void run();
+    explicit InstalledVappsCheckThread(VappsAsync *parent);
+    void run() override;
     void triggerCheckAppStart(QString id, QString name);
 
-Q_SIGNALS:
+signals:
     void resultReady(QString appId, bool isStarted, QString msg);
 
 private:
-    QString m_appId;
-    QString m_appName;
-    bool m_istriggeredAppStart = false;
-    VappsAsync *m_serviceAsync = nullptr;
-    QFileSystemWatcher *m_filewatcher = nullptr;
+    QString             m_appId;
+    QString             m_appName;
+    bool                m_istriggeredAppStart {false};
+    VappsAsync         *m_serviceAsync {nullptr};
+    QFileSystemWatcher *m_filewatcher  {nullptr};
 };
 
-class VappsAsync: public QObject
+// ───────────────────────────────────────────────────────────────
+// The object exposed to QML
+// ───────────────────────────────────────────────────────────────
+class VappsAsync : public QObject
 {
     Q_OBJECT
 public:
-    VappsAsync();
+    explicit VappsAsync();
 
     Q_INVOKABLE void initInstalledFromDB();
-
-    Q_INVOKABLE void executeServices(int appIdx, const QString name, const QString appId, bool isSubscribed);
-
-    Q_INVOKABLE void removeServices(const int index);
-
+    Q_INVOKABLE void executeServices(
+        int appIdx, const QString name,
+        const QString appId, bool isSubscribed);
+    Q_INVOKABLE void removeServices(int index);
     Q_INVOKABLE void openAppEditor(int idx);
 
-Q_SIGNALS:
-    void appendServicesInfoToServicesList(QString name, QString author, QString rating, QString noofdownload, QString icon, bool isInstalled, QString appId, bool isSubscribed);
-    void appendLastRowToServicesList(const int noOfServicess);
+signals:
+    void appendServicesInfoToServicesList(QString name, QString author,
+                                          QString rating, QString noofdownload,
+                                          QString icon, bool isInstalled,
+                                          QString appId, bool isSubscribed);
+    void appendLastRowToServicesList(int noOfServices);
     void clearServicesListView();
     void updateStartAppMsg(QString appId, bool isStarted, QString msg);
     void updateServicesRunningSts(QString appId, bool isStarted, int idx);
 
-public Q_SLOTS:
+public slots:
     void handleResults(QString appId, bool isStarted, QString msg);
-    void fileChanged(const QString& path);
+    void fileChanged(const QString &path);
     void checkRunningAppSts();
     void onInstallerFinished(int exitCode, QProcess::ExitStatus status);
 
 private:
-    QList<VappsListStruct> installedVappsList;
-    InstalledVappsCheckThread *m_workerThread;
-    QTimer *m_timer_apprunningcheck;
-    QProcess* m_installer;
+    QList<VappsListStruct>      installedVappsList;
+    InstalledVappsCheckThread  *m_workerThread      {nullptr};
+    QTimer                     *m_timer_apprunningcheck {nullptr};
+    QProcess                   *m_installer         {nullptr};
 };
 
-#endif //INSTALLEDVAPPS_H
+#endif // INSTALLEDVAPPS_H

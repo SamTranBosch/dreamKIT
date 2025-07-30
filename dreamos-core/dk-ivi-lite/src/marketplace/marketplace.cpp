@@ -1,4 +1,3 @@
-#include "marketplace.hpp"
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -8,6 +7,14 @@
 #include <QProcess>
 #include <QHostInfo>
 #include <QProcessEnvironment>
+
+#include "marketplace.hpp"
+#include "core/datamanager.hpp"
+#include "k3s/manifestbuilder.hpp"
+#include "k3s/installer.hpp"
+
+using K3s::ManifestBuilder;
+using K3s::Installer;
 
 extern QString DK_VCU_USERNAME;
 extern QString DK_ARCH;
@@ -155,7 +162,7 @@ MarketplaceViewModel::MarketplaceViewModel(QObject *parent)
   : QObject(parent)
   , m_apps(new AppListModel(this))
   , m_cats(new CategoryListModel(this))
-  , m_installer(new QProcess(this))
+  , m_installer(new Installer(this))
 {
     // … load categories, do initial search, etc …
     // 1) load the file you shipped or created at runtime
@@ -163,59 +170,16 @@ MarketplaceViewModel::MarketplaceViewModel(QObject *parent)
                   + "/marketplaceselection.json";
     m_cats->loadFromJsonFile(cfg);
 
-    // Merge stderr/stdout so we can see errors in one channel:
-    m_installer->setProcessChannelMode(QProcess::MergedChannels);
-
-    // Log when the process actually starts:
-    connect(m_installer, &QProcess::started, this, [this](){
-        qDebug() << "[Installer] process started";
-    });
-
-    // If the process itself fails to launch:
-    connect(m_installer,
-            static_cast<void(QProcess::*)(QProcess::ProcessError)>(&QProcess::errorOccurred),
-            this,
-            [this](QProcess::ProcessError err){
-                qWarning() << "[Installer] errorOccurred:" << err
-                           << m_installer->errorString();
-                if (m_isInstalling) {
-                    m_isInstalling = false;
-                    emit isInstallingChanged(false);
-                }
-            });
-
-    // When the process finishes (either success or failure):
-    connect(m_installer,
-            QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
-            this,
-            [this](int exitCode, QProcess::ExitStatus exitStatus){
-                qDebug() << "[Installer] finished, code=" << exitCode
-                         << "status=" << exitStatus;
-            });
-
-    // Merge stderr/stdout
-    m_installer->setProcessChannelMode(QProcess::MergedChannels);
-
-    // When one step finishes, decide what to do next:
-    connect(m_installer,
-            QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
-            this,
-            [this](int exitCode, QProcess::ExitStatus exitStatus){
-        qDebug() << "[Installer] step" << (m_installCmdIndex)
-                 << "finished with code=" << exitCode;
-        if (exitStatus==QProcess::NormalExit && exitCode==0) {
-            runNextInstallCommand();  // go to the next
-        }
-        else {
-            qWarning() << "[Installer] FAILED at step"
-                       << m_installCmdIndex
-                       << "code=" << exitCode
-                       << "\noutput:\n"
-                       << m_installer->readAll();
-            // abort and clear busy flag
-            m_isInstalling = false;
-            emit isInstallingChanged(false);
-        }
+    connect(m_installer, &Installer::busyChanged,
+        this, [this](bool b){ m_isInstalling = b;
+                               emit isInstallingChanged(b); });
+    connect(m_installer, &Installer::finished,
+            this, [this](bool ok){
+        if (ok && m_pendingIndex >= 0)
+            m_apps->setAppInstalled(m_pendingIndex, true);
+        m_pendingIndex = -1;
+        m_installingIndex = -1;
+        emit installingIndexChanged(-1);
     });
 }
 
@@ -257,20 +221,11 @@ void MarketplaceViewModel::search(const QString &term)
     }
 
     // 3) load the tracking file and collect installed IDs
-    QString trackFile;
-    if (opt.category == QLatin1String("vehicle")) {
-        trackFile = opt.rootFolder + "/installedapps.json";
-    }
-    else if (opt.category == QLatin1String("vehicle-service")) {
-        trackFile = opt.rootFolder + "/installedservices.json";
-    }
-    // else: no tracking for other categories
-
-    if (!trackFile.isEmpty()) {
-        auto doc = DataManager::loadJsonFile(
-                     trackFile,
-                     QJsonValue(QJsonArray()));
-        QJsonArray arr = doc.isArray() ? doc.array() : QJsonArray();
+    if (opt.category == QLatin1String("vehicle") || opt.category == QLatin1String("vehicle-service"))
+    {
+        DataManager dm;
+        QJsonArray arr = dm.load(opt.category);
+        qDebug() << "[MarketplaceViewModel::search] Loaded" << arr.size() << "installed services from";
 
         QSet<QString> installedIds;
         for (auto v : arr) {
@@ -306,142 +261,84 @@ void MarketplaceViewModel::appSelected(int idx) {
     }
 }
 
-void MarketplaceViewModel::prepareInstall(int idx) {
-    // QVariantMap info = m_apps->get(idx);
-
-    // if (idx < 0 || idx >= m_lastApps.size()) return;
-    // if (!info.value("isInstalled").toBool()) {
-        // 2) pick the right tracking file
-        QString folder = DK_CONTAINER_ROOT + "dk_marketplace/";
-        QString trackFile;
-        if (m_lastSearchTerm == QLatin1String("vehicle")) {
-            trackFile = folder + "installedapps.json";
-        }
-        else if (m_lastSearchTerm == QLatin1String("vehicle-service")) {
-            trackFile = folder + "installedservices.json";
-        }
-        else {
-            return;  // no tracking for other categories
-        }
-    
-        // 3) load or create the JSON array
-        QJsonDocument doc = DataManager::loadJsonFile(
-                            trackFile,
-                            QJsonValue(QJsonArray()));
-        QJsonArray arr = doc.isArray() ? doc.array() : QJsonArray();
-
-        // 4) build the new record
-        const AppInfo &app = m_lastApps[idx];
-        QString        id  = app.id;
-
-        // 5) only append if we haven’t already installed it
-        bool already = false;
-        for (auto v : arr) {
-            if (!v.isObject()) continue;
-            if (v.toObject().value("id").toString() == id) {
-                already = true;
-                break;
-            }
-        }
-        if (!already) {
-            QJsonObject rec;
-            rec["id"]          = app.id;
-            rec["name"]        = app.name;
-            rec["author"]      = app.author;
-            rec["rating"]      = app.rating;
-            rec["iconPath"]    = app.iconUrl;
-            rec["thumbnail"]   = app.iconUrl;
-            rec["installedAt"] = QDateTime::currentDateTime()
-                                    .toString(Qt::ISODate);
-            arr.append(rec);
-
-            // 6) write the updated array back to disk
-            DataManager::saveJsonFile(trackFile,
-                                    QJsonDocument(arr));
-        }
-
-        // 7) now *also* emit the per‐app JSON+YAML via DataManager
-        //    (this was previously in fetchAppList)
-        DataManager::saveAppConfig(app, folder);
-    // }
-}
-
 void MarketplaceViewModel::confirmInstall()
 {
-    if (!m_installPending || m_pendingIndex < 0
-        || m_pendingIndex >= m_lastApps.size())
-        return;
-    // 
-    prepareInstall(m_installingIndex);
+    if (!m_installPending) return;
 
-    // clear “Pending” dialog in UI
+    // 
+    confirmInstallPre(m_installingIndex);
+
+    // 
+    const AppInfo &app = m_lastApps[m_pendingIndex];
+
+    QStringList cmds;
+    cmds << QString("kubectl delete job pull-%1 --ignore-not-found").arg(app.name.toLower())
+         << QString("kubectl apply -f %1").arg(m_lastManifest.pullJobYaml)
+         << QString("kubectl wait --for=condition=complete job/pull-%1 --timeout=300s").arg(app.name.toLower())
+         << QString("kubectl delete job pull-%1 --ignore-not-found").arg(app.name.toLower());
+    if (m_lastManifest.isRemoteNode) {
+        cmds << QString("kubectl delete job mirror-%1 --ignore-not-found").arg(app.name.toLower())
+             << QString("kubectl apply -f %1").arg(m_lastManifest.mirrorJobYaml)
+             << QString("kubectl wait --for=condition=complete job/mirror-%1 --timeout=300s").arg(app.name.toLower())
+             << QString("kubectl delete job mirror-%1 --ignore-not-found").arg(app.name.toLower());
+    }
+
+    // start kubectl pipeline
+    m_installer->queueAndRun(cmds);
+
+    // 
+    confirmInstallPost(m_installingIndex);
+
+    // UI flags
     m_installPending = false;
     emit installPendingChanged(false);
-
-    // figure out node & YAML names exactly as in saveAppConfig()
-    const AppInfo &app = m_lastApps[m_pendingIndex];
-    QString lcName   = app.name.toLower();
-    QString baseDir  = DK_CONTAINER_ROOT + "dk_marketplace/" + app.id;
-    QString target   = app.dashboardConfig.Target;
-    QString node;
-
-    // resolve node same as before...
-    if (target.isEmpty() || target == "xip") {
-        node = "xip";
-    } else {
-        node = "vip";
-    }
-
-    bool remote = (node != "xip");
-    qDebug() << "[Installer] remote:" << remote;
-
-    QString yaml_pull       = QString("%1/%2_pull.yaml").arg(baseDir, app.id);
-    QString yaml_mirror     = QString("%1/%2_mirror.yaml").arg(baseDir, app.id);
-    QString jobName_pull    = QString("pull-%1").arg(lcName);
-    QString jobName_mirror  = QString("mirror-%1").arg(lcName);
-    
-    // build our three‐step queue
-    m_installCommands.clear();
-    m_installCommands << QString("kubectl apply -f %1").arg(yaml_pull)
-                      << QString("kubectl wait --for=condition=complete job/%1 --timeout=300s")
-                           .arg(jobName_pull)
-                      << QString("kubectl delete job %1").arg(jobName_pull);
-    if(remote){
-        m_installCommands << QString("kubectl apply -f %1").arg(yaml_mirror)
-                          << QString("kubectl wait --for=condition=complete job/%1 --timeout=300s")
-                               .arg(jobName_mirror)
-                          << QString("kubectl delete job %1").arg(jobName_mirror);
-    }
-    m_installCmdIndex = 0;
-
-    // show busy spinner in QML
-    m_isInstalling = true;
-    emit isInstallingChanged(true);
-
-    // fire off step #1
-    runNextInstallCommand();
 }
 
-void MarketplaceViewModel::runNextInstallCommand()
+void MarketplaceViewModel::confirmInstallPre(int idx)
 {
-    // if we've exhausted the queue, we're done
-    if (m_installCmdIndex >= m_installCommands.size()) {
-        qDebug() << "[Installer] ALL STEPS DONE";
-        m_isInstalling = false;
-        emit isInstallingChanged(false);
+    // update tracking json
+    DataManager dm;
+    QJsonArray arr = dm.load(m_lastSearchTerm);
+    qDebug() << "[MarketplaceViewModel::confirmInstallPre] Loaded " << m_lastSearchTerm << " installed services from";
 
-        // mark installed
-        if (m_pendingIndex >= 0) {
-            m_apps->setAppInstalled(m_pendingIndex, true);
-            m_pendingIndex = -1;
-        }
-        return;
+    const AppInfo &app = m_lastApps[idx];
+    bool exists = false;
+    for (auto v : arr)
+        if (v.isObject() && v.toObject().value("id").toString() == app.id)
+            { exists = true; break; }
+
+    if (!exists) {
+        m_lastManifest = ManifestBuilder::write(app);
+        qDebug() << "[MarketplaceViewModel::confirmInstallPre] emit per-app configs & YAMLs";
     }
+}
 
-    // grab & run the next shell line
-    const QString cmd = m_installCommands.at(m_installCmdIndex++);
-    qDebug() << "[Installer] RUNNING STEP" << m_installCmdIndex << ":" << cmd;
-    m_installer->start("sh", QStringList{ "-c", cmd });
+void MarketplaceViewModel::confirmInstallPost(int idx)
+{
+    // update tracking json
+    DataManager dm;
+    QJsonArray arr = dm.load(m_lastSearchTerm);
+    qDebug() << "[MarketplaceViewModel::confirmInstallPost] Loaded " << m_lastSearchTerm << " installed services from";
+
+    const AppInfo &app = m_lastApps[idx];
+    bool exists = false;
+    for (auto v : arr)
+        if (v.isObject() && v.toObject().value("id").toString() == app.id)
+            { exists = true; break; }
+
+    if (!exists) {
+        QJsonObject rec;
+        rec["id"]   = app.id;
+        rec["name"] = app.name;
+        rec["author"] = app.author;
+        rec["rating"] = app.rating;
+        rec["thumbnail"] = app.iconUrl;
+        rec["installedAt"] = QDateTime::currentDateTime().toString(Qt::ISODate);
+        arr.append(rec);
+        // save the updated array
+        dm.save(m_lastSearchTerm, arr);
+        qDebug() << "[MarketplaceViewModel::confirmInstallPost] save the updated array";
+    }
 }
 
 void MarketplaceViewModel::cancelInstall() {

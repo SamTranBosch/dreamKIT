@@ -6,9 +6,11 @@
 #include <QDir>
 
 // bring in your existing fetch helpers:
-#include "fetching.hpp"
-#include "datamanager.hpp"
+#include "core/fetching.hpp"
+#include "core/datamanager.hpp"
 
+#include "k3s/manifestbuilder.hpp"
+#include "k3s/installer.hpp"
 
 class AppListModel : public QAbstractListModel {
     Q_OBJECT
@@ -88,8 +90,9 @@ class MarketplaceViewModel : public QObject {
     void search(const QString& term);
     void setCurrentCategory(int idx);   // setter for Q_PROPERTY
     void appSelected(int idx);
-    void prepareInstall(int idx);
     void confirmInstall();
+    void confirmInstallPre(int idx);
+    void confirmInstallPost(int idx);
     void cancelInstall();
 
   signals:
@@ -102,8 +105,10 @@ class MarketplaceViewModel : public QObject {
   private:
     AppListModel*      m_apps         = nullptr;
     CategoryListModel* m_cats         = nullptr;
-    QProcess*          m_installer    = nullptr;
     QList<AppInfo>     m_lastApps;
+
+    K3s::Installer      *m_installer = nullptr;
+    K3s::ManifestInfo    m_lastManifest;
 
     QStringList        m_installCommands;     // queue of kubectl steps
     int                m_installCmdIndex{0};  // current step index
