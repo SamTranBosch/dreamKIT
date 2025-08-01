@@ -19,7 +19,6 @@ extern QString DK_ARCH;
 extern QString DK_DOCKER_HUB_NAMESPACE;
 extern QString DK_CONTAINER_ROOT;
 
-static QMutex   dk_installedsersMutex;
 static QString  DK_INSTALLED_SERS_FOLDER;
 
 // ───────────────────────────────────────────────────────────────
@@ -106,7 +105,7 @@ VsersAsync::VsersAsync()
     m_timer_apprunningcheck = new QTimer(this);
     connect(m_timer_apprunningcheck, &QTimer::timeout,
             this, &VsersAsync::checkRunningAppSts);
-    m_timer_apprunningcheck->start(3000);
+    m_timer_apprunningcheck->start(5000);
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -142,13 +141,19 @@ void VsersAsync::openAppEditor(int idx)
 // ───────────────────────────────────────────────────────────────
 void VsersAsync::initInstalledFromDB()
 {
-    QMutexLocker lock(&dk_installedsersMutex);
-
     emit clearServicesListView();
     installedVappsList.clear();
 
     DataManager dm;
     QJsonArray arr = dm.load("vehicle-service");
+
+    updateInstalledList(arr);
+}
+
+void VsersAsync::updateInstalledList(const QJsonArray &arr)
+{
+    emit clearServicesListView();
+    installedVappsList.clear();
 
     for (const auto &v : arr) {
         if (!v.isObject()) continue;
@@ -159,7 +164,7 @@ void VsersAsync::initInstalledFromDB()
         app.name        = o.value("name").toString();
         app.author      = o.value("author").toString();
         app.rating      = o.value("rating").toString();
-        app.iconPath    = o.value("iconPath").toString();
+        app.iconPath    = o.value("thumbnail").toString();
         app.isInstalled = true;
         app.isSubscribed= o.value("subscribed").toBool();
         installedVappsList.append(app);
@@ -172,10 +177,9 @@ void VsersAsync::initInstalledFromDB()
             app.iconPath, app.isInstalled,
             app.id, app.isSubscribed);
 }
-
-// ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 // Apply / Delete deployment
-// ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 void VsersAsync::executeServices(int appIdx,
                                  const QString /*name*/,
                                  const QString appId,
@@ -186,47 +190,112 @@ void VsersAsync::executeServices(int appIdx,
     const QString deployYaml = QString("%1/%2/%2_deployment.yaml")
                                .arg(DK_INSTALLED_SERS_FOLDER, appId);
 
-    const QString cmd = isSubscribed
-        ? QString("kubectl apply -f %1").arg(deployYaml)
-        : QString("kubectl delete -f %1 --ignore-not-found").arg(deployYaml);
+    const QStringList cmds = isSubscribed
+        ? QStringList{ QString("kubectl apply -f %1").arg(deployYaml) }
+        : QStringList{ QString("kubectl delete -f %1 --ignore-not-found")
+                          .arg(deployYaml) };
 
-    qDebug() << "[Installer]" << cmd;
-    m_installer->start("sh", {"-c", cmd});
+    auto *chain = new Async::Chain(this);
 
-    InstalledVsersCheckThread *worker = new InstalledVsersCheckThread(this);
-    connect(worker, &InstalledVsersCheckThread::resultReady,
-            this, &VsersAsync::handleResults);
-    worker->triggerCheckAppStart(appId, installedVappsList[appIdx].name.toLower());
+    /* step-0 : kubectl (runs in GUI thread, waits synchronously) */
+    chain->add([cmds = std::move(cmds)](){
+
+        bool okKubectl = false;
+    
+        QMetaObject::invokeMethod(
+            qApp,                                        // run in GUI thread
+            [&cmds, &okKubectl](){
+    
+                K3s::Installer installer;                // local, GUI thread
+                QEventLoop loop;
+    
+                QObject::connect(&installer, &K3s::Installer::finished,
+                                 &loop,
+                                 [&](bool ok){ okKubectl = ok; loop.quit(); },
+                                 Qt::QueuedConnection);
+    
+                installer.queueAndRun(cmds);
+                loop.exec();                             // wait for pipeline
+            },
+            Qt::BlockingQueuedConnection);
+    
+        if (!okKubectl)
+            throw std::runtime_error("kubectl apply/delete failed");
+    });    
+
+    /* step-1 : docker-ps watcher (worker thread) */
+    chain->add([this, appId, appIdx, isSubscribed](){
+        InstalledVsersCheckThread *worker = new InstalledVsersCheckThread(this);
+        connect(worker, &InstalledVsersCheckThread::resultReady,
+                this,   &VsersAsync::handleResults,
+                Qt::QueuedConnection);
+
+        worker->triggerCheckAppStart(
+                appId,
+                installedVappsList[appIdx].name.toLower());
+
+        installedVappsList[appIdx].isSubscribed = isSubscribed;
+    });
+
+    chain->start();
 }
 
-// ───────────────────────────────────────────────────────────────
-// Remove services (and update installedservices.json)
-// ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Remove services
+// ─────────────────────────────────────────────────────────────
 void VsersAsync::removeServices(int index)
 {
     if (index < 0 || index >= installedVappsList.size()) return;
 
     const QString appId = installedVappsList[index].id;
-
-    // load + filter
-    DataManager dm;
-    QJsonArray arr = dm.load("vehicle-service");
-    qDebug() << "[VsersAsync] Loaded" << arr.size() << "installed apps from";
-
-    // filter out the appId
-    QJsonArray out;
-    for (const auto &v : arr)
-        if (v.isObject() && v.toObject().value("id").toString() != appId)
-            out.append(v);
-
-    dm.save("vehicle-service", out);
-
-    // kubectl delete
     const QString deployYaml = QString("%1/%2/%2_deployment.yaml")
                                .arg(DK_INSTALLED_SERS_FOLDER, appId);
-    const QString cmd = QString("kubectl delete -f %1 --ignore-not-found").arg(deployYaml);
-    qDebug() << "[Installer]" << cmd;
-    m_installer->start("sh", {"-c", cmd});
+
+    auto *chain = new Async::Chain(this);
+
+    /* step-0 : update installedservices.json (worker thread) */
+    chain->add([appId](){
+        DataManager dm;
+        QJsonArray arr = dm.load("vehicle-service");
+        QJsonArray out;
+        for (const auto &v : arr)
+            if (v.isObject() && v.toObject().value("id").toString() != appId)
+                out.append(v);
+        dm.save("vehicle-service", out);
+    });
+
+    /* step-1 : kubectl delete in GUI thread */
+    chain->add([deployYaml](){
+
+        bool okKubectl = false;
+    
+        QMetaObject::invokeMethod(
+            qApp,
+            [&deployYaml, &okKubectl](){
+    
+                const QStringList cmds{
+                    QString("kubectl delete -f %1 --ignore-not-found")
+                            .arg(deployYaml)
+                };
+    
+                K3s::Installer installer;
+                QEventLoop loop;
+    
+                QObject::connect(&installer, &K3s::Installer::finished,
+                                 &loop,
+                                 [&](bool ok){ okKubectl = ok; loop.quit(); },
+                                 Qt::QueuedConnection);
+    
+                installer.queueAndRun(cmds);
+                loop.exec();
+            },
+            Qt::BlockingQueuedConnection);
+    
+        if (!okKubectl)
+            throw std::runtime_error("kubectl delete failed");
+    });    
+
+    chain->start();
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -245,13 +314,29 @@ void VsersAsync::handleResults(QString appId, bool isStarted, QString msg)
     }
 }
 
-// ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 // File changed (installedservices.json)   reload list
-// ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 void VsersAsync::fileChanged(const QString &path)
 {
-    QThread::msleep(1000);   // debounce
-    initInstalledFromDB();
+    /* debounce in worker thread, no sleep on GUI */
+    auto *job = new Async::Job<QJsonArray>([=](){
+
+        QThread::msleep(500);          // debounce 0.5 s
+        DataManager dm;
+        return dm.load("vehicle-service");   // worker thread!
+
+    }, this);
+
+    connect(job, &Async::JobBase::finished,
+            this, [this, job](bool ok){
+        if (!ok) { job->deleteLater(); return; }
+
+        const QJsonArray arr = job->result();
+        /* a helper you already have   refresh model from JSON */
+        updateInstalledList(arr);
+        job->deleteLater();
+    });
 }
 
 // ───────────────────────────────────────────────────────────────

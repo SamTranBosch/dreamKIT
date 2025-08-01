@@ -1,4 +1,6 @@
 #include "installedvapps.hpp"
+#include "../marketplace/core/datamanager.hpp"
+#include "../marketplace/k3s/installer.hpp"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -8,8 +10,6 @@
 #include <QMutex>
 #include <QProcessEnvironment>
 
-#include "../installedservices/unsafeparamcheck.hpp"
-#include "../marketplace/core/datamanager.hpp"
 
 // ───────────────────────────────────────────────────────────────
 // Globals that already existed
@@ -19,7 +19,6 @@ extern QString DK_ARCH;
 extern QString DK_DOCKER_HUB_NAMESPACE;
 extern QString DK_CONTAINER_ROOT;
 
-static QMutex   dk_installedappsMutex;
 static QString  DK_INSTALLED_APPS_FOLDER;
 
 // ───────────────────────────────────────────────────────────────
@@ -38,6 +37,10 @@ InstalledVappsCheckThread::InstalledVappsCheckThread(VappsAsync *parent)
     }
 }
 
+QString InstalledVappsCheckThread::m_appId;
+QString InstalledVappsCheckThread::m_appName;
+bool InstalledVappsCheckThread::m_istriggeredAppStart = false;
+
 void InstalledVappsCheckThread::triggerCheckAppStart(QString id, QString name)
 {
     m_appId   = std::move(id);
@@ -45,32 +48,26 @@ void InstalledVappsCheckThread::triggerCheckAppStart(QString id, QString name)
     m_istriggeredAppStart = true;
 }
 
-void InstalledVappsCheckThread::run()
+void InstalledVappsCheckThread::resetTriggerFlags()
 {
-    const QString dockerps = DK_INSTALLED_APPS_FOLDER + "listappscmd.log";
-    while (true) {
-        if (m_istriggeredAppStart && !m_appId.isEmpty() && !m_appName.isEmpty())
-        {
-            QThread::msleep(3000);                     // allow container to start
-            const QString cmd = "docker ps > " + dockerps;
-            system(cmd.toUtf8());
-            QFile f(dockerps);
-            f.open(QIODevice::ReadOnly);
-            const QString raw = QTextStream(&f).readAll();
-            f.close();
+    m_istriggeredAppStart = false;
+    m_appId.clear(); m_appName.clear();
+}
 
-            const bool ok = raw.contains(m_appId, Qt::CaseSensitive);
-            const QString msg = ok
-                ? "<b>"+m_appName+"</b> is started successfully."
-                : "<b>"+m_appName+"</b> is NOT started successfully."
-                  "<br><br>Please contact the car OEM for more information !!!";
-            emit resultReady(m_appId, ok, msg);
+void InstalledVappsCheckThread::notifyState(bool ok)
+{
+    if (m_istriggeredAppStart && !m_appId.isEmpty() && !m_appName.isEmpty())
+    {
+        const QString msg = ok
+              ? tr("<b>%1</b> is started successfully.").arg(m_appName)
+              : tr("<b>%1</b> is NOT started successfully.<br><br>"
+                   "Please contact the car OEM for more information !!!")
+                    .arg(m_appName);
+        emit resultReady(m_appId, ok, msg);
+        qDebug() << "[InstalledVappsCheckThread] resultReady:"
+                 << m_appName << ok << msg;
 
-            system(QString("> %1").arg(dockerps).toUtf8()); // truncate
-            m_istriggeredAppStart = false;
-            m_appId.clear(); m_appName.clear();
-        }
-        QThread::msleep(100);
+        resetTriggerFlags();
     }
 }
 
@@ -108,7 +105,7 @@ VappsAsync::VappsAsync()
     m_timer_apprunningcheck = new QTimer(this);
     connect(m_timer_apprunningcheck, &QTimer::timeout,
             this, &VappsAsync::checkRunningAppSts);
-    m_timer_apprunningcheck->start(3000);
+    m_timer_apprunningcheck->start(5000);
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -144,14 +141,19 @@ void VappsAsync::openAppEditor(int idx)
 // ───────────────────────────────────────────────────────────────
 void VappsAsync::initInstalledFromDB()
 {
-    QMutexLocker lock(&dk_installedappsMutex);
-
     emit clearServicesListView();
     installedVappsList.clear();
 
     DataManager dm;
     QJsonArray arr = dm.load("vehicle");
-    qDebug() << "[VappsAsync] Loaded" << arr.size() << "installed apps from";
+
+    updateInstalledList(arr);
+}
+
+void VappsAsync::updateInstalledList(const QJsonArray &arr)
+{
+    emit clearServicesListView();
+    installedVappsList.clear();
 
     for (const auto &v : arr) {
         if (!v.isObject()) continue;
@@ -162,13 +164,11 @@ void VappsAsync::initInstalledFromDB()
         app.name        = o.value("name").toString();
         app.author      = o.value("author").toString();
         app.rating      = o.value("rating").toString();
-        app.iconPath    = o.value("iconPath").toString();
+        app.iconPath    = o.value("thumbnail").toString();
         app.isInstalled = true;
         app.isSubscribed= o.value("subscribed").toBool();
         installedVappsList.append(app);
     }
-
-    qDebug() << "[VappsAsync] loaded" << installedVappsList.size();
 
     for (const auto &app : installedVappsList)
         appendServicesInfoToServicesList(
@@ -177,10 +177,9 @@ void VappsAsync::initInstalledFromDB()
             app.iconPath, app.isInstalled,
             app.id, app.isSubscribed);
 }
-
-// ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 // Apply / Delete deployment
-// ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 void VappsAsync::executeServices(int appIdx,
                                  const QString /*name*/,
                                  const QString appId,
@@ -191,42 +190,112 @@ void VappsAsync::executeServices(int appIdx,
     const QString deployYaml = QString("%1/%2/%2_deployment.yaml")
                                .arg(DK_INSTALLED_APPS_FOLDER, appId);
 
-    const QString cmd = isSubscribed
-        ? QString("kubectl apply -f %1").arg(deployYaml)
-        : QString("kubectl delete -f %1 --ignore-not-found").arg(deployYaml);
+    const QStringList cmds = isSubscribed
+        ? QStringList{ QString("kubectl apply -f %1").arg(deployYaml) }
+        : QStringList{ QString("kubectl delete -f %1 --ignore-not-found")
+                          .arg(deployYaml) };
 
-    qDebug() << "[Installer]" << cmd;
-    m_installer->start("sh", {"-c", cmd});
+    auto *chain = new Async::Chain(this);
+
+    /* step-0 : kubectl (runs in GUI thread, waits synchronously) */
+    chain->add([cmds = std::move(cmds)](){
+
+        bool okKubectl = false;
+    
+        QMetaObject::invokeMethod(
+            qApp,                                        // run in GUI thread
+            [&cmds, &okKubectl](){
+    
+                K3s::Installer installer;                // local, GUI thread
+                QEventLoop loop;
+    
+                QObject::connect(&installer, &K3s::Installer::finished,
+                                 &loop,
+                                 [&](bool ok){ okKubectl = ok; loop.quit(); },
+                                 Qt::QueuedConnection);
+    
+                installer.queueAndRun(cmds);
+                loop.exec();                             // wait for pipeline
+            },
+            Qt::BlockingQueuedConnection);
+    
+        if (!okKubectl)
+            throw std::runtime_error("kubectl apply/delete failed");
+    });    
+
+    /* step-1 : docker-ps watcher (worker thread) */
+    chain->add([this, appId, appIdx, isSubscribed](){
+        InstalledVappsCheckThread *worker = new InstalledVappsCheckThread(this);
+        connect(worker, &InstalledVappsCheckThread::resultReady,
+                this,   &VappsAsync::handleResults,
+                Qt::QueuedConnection);
+
+        worker->triggerCheckAppStart(
+                appId,
+                installedVappsList[appIdx].name.toLower());
+
+        installedVappsList[appIdx].isSubscribed = isSubscribed;
+    });
+
+    chain->start();
 }
 
-// ───────────────────────────────────────────────────────────────
-// Remove services (and update installedapps.json)
-// ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Remove services
+// ─────────────────────────────────────────────────────────────
 void VappsAsync::removeServices(int index)
 {
     if (index < 0 || index >= installedVappsList.size()) return;
 
     const QString appId = installedVappsList[index].id;
-
-    // load + filter
-    DataManager dm;
-    QJsonArray arr = dm.load("vehicle");
-    qDebug() << "[VappsAsync] Loaded" << arr.size() << "installed apps from";
-
-    // filter out the appId
-    QJsonArray out;
-    for (const auto &v : arr)
-        if (v.isObject() && v.toObject().value("id").toString() != appId)
-            out.append(v);
-
-    dm.save("vehicle", out);
-
-    // kubectl delete
     const QString deployYaml = QString("%1/%2/%2_deployment.yaml")
                                .arg(DK_INSTALLED_APPS_FOLDER, appId);
-    const QString cmd = QString("kubectl delete -f %1 --ignore-not-found").arg(deployYaml);
-    qDebug() << "[Installer]" << cmd;
-    m_installer->start("sh", {"-c", cmd});
+
+    auto *chain = new Async::Chain(this);
+
+    /* step-0 : update installedapps.json (worker thread) */
+    chain->add([appId](){
+        DataManager dm;
+        QJsonArray arr = dm.load("vehicle");
+        QJsonArray out;
+        for (const auto &v : arr)
+            if (v.isObject() && v.toObject().value("id").toString() != appId)
+                out.append(v);
+        dm.save("vehicle", out);
+    });
+
+    /* step-1 : kubectl delete in GUI thread */
+    chain->add([deployYaml](){
+
+        bool okKubectl = false;
+    
+        QMetaObject::invokeMethod(
+            qApp,
+            [&deployYaml, &okKubectl](){
+    
+                const QStringList cmds{
+                    QString("kubectl delete -f %1 --ignore-not-found")
+                            .arg(deployYaml)
+                };
+    
+                K3s::Installer installer;
+                QEventLoop loop;
+    
+                QObject::connect(&installer, &K3s::Installer::finished,
+                                 &loop,
+                                 [&](bool ok){ okKubectl = ok; loop.quit(); },
+                                 Qt::QueuedConnection);
+    
+                installer.queueAndRun(cmds);
+                loop.exec();
+            },
+            Qt::BlockingQueuedConnection);
+    
+        if (!okKubectl)
+            throw std::runtime_error("kubectl delete failed");
+    });    
+
+    chain->start();
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -245,13 +314,29 @@ void VappsAsync::handleResults(QString appId, bool isStarted, QString msg)
     }
 }
 
-// ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 // File changed (installedapps.json)   reload list
-// ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 void VappsAsync::fileChanged(const QString &path)
 {
-    QThread::msleep(1000);   // debounce
-    initInstalledFromDB();
+    /* debounce in worker thread, no sleep on GUI */
+    auto *job = new Async::Job<QJsonArray>([=](){
+
+        QThread::msleep(500);          // debounce 0.5 s
+        DataManager dm;
+        return dm.load("vehicle");   // worker thread!
+
+    }, this);
+
+    connect(job, &Async::JobBase::finished,
+            this, [this, job](bool ok){
+        if (!ok) { job->deleteLater(); return; }
+
+        const QJsonArray arr = job->result();
+        /* a helper you already have   refresh model from JSON */
+        updateInstalledList(arr);
+        job->deleteLater();
+    });
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -266,20 +351,27 @@ void VappsAsync::checkRunningAppSts()
             continue;
         }
 
-        const QString deployId = app.id.toLower();
-        QProcess proc;
-        proc.setProgram("kubectl");
-        proc.setArguments({"wait",
-                           "--for=condition=available",
-                           "deployment/" + deployId,
-                           "--timeout=2s"});
-        proc.setProcessChannelMode(QProcess::MergedChannels);
+        const QString appId   = app.id;
+        const QString appName = app.name.toLower();
 
-        proc.start();
-        const bool started  = proc.waitForStarted(1000);
-        const bool finished = proc.waitForFinished(3000);
-        const bool ok       = (started && finished && proc.exitCode() == 0);
+        auto *job = K3s::Installer::deploymentAvailableAsync(
+                        appName, 10, this);
 
-        emit updateServicesRunningSts(app.id, ok, i);
+        connect(job,
+                &Async::Job<K3s::DeploymentCheck>::finished,
+                this,
+                /* capture id + index + job */
+                [this, i, job, appId](bool){
+            const auto res = job->result();
+            emit updateServicesRunningSts(appId, res.available, i);
+            job->deleteLater();
+
+            InstalledVappsCheckThread *worker = new InstalledVappsCheckThread(this);
+            if (res.available) {
+                connect(worker, &InstalledVappsCheckThread::resultReady,
+                    this, &VappsAsync::handleResults);
+                    worker->notifyState(res.available);
+            }
+        });
     }
 }

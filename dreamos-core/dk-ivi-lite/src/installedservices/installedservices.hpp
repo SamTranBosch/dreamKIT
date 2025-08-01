@@ -67,6 +67,7 @@ public:
     explicit VsersAsync();
 
     Q_INVOKABLE void initInstalledFromDB();
+    Q_INVOKABLE void updateInstalledList(const QJsonArray &arr);
     Q_INVOKABLE void executeServices(
         int appIdx, const QString name,
         const QString appId, bool isSubscribed);

@@ -9,17 +9,25 @@
 using Core::JsonStorage;
 using Core::AppSerializer;
 
-QJsonArray DataManager::load(const QString &target)
-{
-    QString folder = DK_CONTAINER_ROOT + "dk_marketplace/";
-    QString filePath = (target == QLatin1String("vehicle"))
-                        ? folder + "installedapps.json"
-                        : folder + "installedservices.json";
+QRecursiveMutex DataManager::s_jsonMutex;
 
-    // If file is missing or unreadable, it will be created with 'def' and
-    // that default document is returned.
-    auto doc = JsonStorage::load(filePath, QJsonValue(QJsonArray()));
-    if (doc.isNull()) {
+/* ------------------------------ load ----------------------------- */
+QJsonArray DataManager::load(const QString &target, int timeoutMs)
+{
+    const QString folder   = DK_CONTAINER_ROOT + "dk_marketplace/";
+    const QString filePath = (target == QLatin1String("vehicle"))
+                           ? folder + "installedapps.json"
+                           : folder + "installedservices.json";
+
+    MutexTryLocker guard(&s_jsonMutex, timeoutMs);
+    if (!guard.locked()) {
+        qWarning() << "DataManager::load: timeout (" << timeoutMs
+                   << "ms) waiting for" << filePath;
+        return {};                                       // early return
+    }
+
+    const auto doc = JsonStorage::load(filePath, QJsonValue(QJsonArray()));
+    if (doc.isNull())  {
         qWarning() << "DataManager::load: cannot read" << filePath;
         return {};
     }
@@ -27,25 +35,34 @@ QJsonArray DataManager::load(const QString &target)
         qWarning() << "DataManager::load: array expected in" << filePath;
         return {};
     }
-    return doc.array();
+    return doc.array();                      // guard unlocks automatically
 }
 
-bool DataManager::save(const QString &target, const QJsonArray &arr)
+/* ------------------------------ save ----------------------------- */
+bool DataManager::save(const QString &target,
+                       const QJsonArray &arr,
+                       int timeoutMs)
 {
-    QString folder = DK_CONTAINER_ROOT + "dk_marketplace/";
-    QString filePath = (target == QLatin1String("vehicle"))
-                        ? folder + "installedapps.json"
-                        : folder + "installedservices.json";
+    const QString folder   = DK_CONTAINER_ROOT + "dk_marketplace/";
+    const QString filePath = (target == QLatin1String("vehicle"))
+                           ? folder + "installedapps.json"
+                           : folder + "installedservices.json";
 
-    // Create a QJsonDocument from the QJsonArray
-    QJsonDocument m_doc(arr);
-    auto ret = JsonStorage::save(filePath, m_doc);
-    if (!ret) {
+    QJsonDocument doc(arr);
+
+    MutexTryLocker guard(&s_jsonMutex, timeoutMs);
+    if (!guard.locked()) {
+        qWarning() << "DataManager::save: timeout (" << timeoutMs
+                   << "ms) waiting for" << filePath;
+        return false;                                    // early return
+    }
+
+    if (!JsonStorage::save(filePath, doc)) {
         qWarning() << "DataManager::save: cannot write" << filePath;
         return false;
     }
     qDebug() << "DataManager::save: saved" << filePath;
-    return true;
+    return true;                                         // guard unlocks
 }
 
 QList<AppInfo> DataManager::fetchAppList(const FetchOptions &opt)
@@ -61,7 +78,7 @@ QList<AppInfo> DataManager::fetchAppList(const FetchOptions &opt)
     if (!queryMarketplacePackages(opt.marketUrl, token,
                                   opt.page, opt.limit, opt.category))
     {
-        qWarning() << "DataManager::fetchAppList: HTTP failed";
+        qWarning() << "[DataManager::fetchAppList] HTTP failed";
         return {};
     }
 
@@ -69,7 +86,7 @@ QList<AppInfo> DataManager::fetchAppList(const FetchOptions &opt)
     const QString listPath = opt.rootFolder + "/marketplace_data_installcfg.json";
     const auto doc = JsonStorage::load(listPath, QJsonValue(QJsonArray()));
     if (!doc.isArray()) {
-        qWarning() << "DataManager::fetchAppList: array expected in" << listPath;
+        qWarning() << "[DataManager::fetchAppList] array expected in" << listPath;
         return {};
     }
 

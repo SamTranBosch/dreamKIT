@@ -12,8 +12,6 @@ struct DashboardSignal {
     QString vss2dbcSignal, dbc2vssSignal;
 
     static DashboardSignal fromJson(const QJsonObject &o) {
-        static QMutex mutex;
-        QMutexLocker lock(&mutex);
         DashboardSignal s;
         s.vssApi        = o.value("vss_api").toString();
         s.vssType       = o.value("vss_type").toString();
@@ -25,8 +23,6 @@ struct DashboardSignal {
     }
 
     QJsonObject toJson() const {
-        static QMutex mutex;
-        QMutexLocker lock(&mutex);
         QJsonObject o;
         o["vss_api"]          = vssApi;
         o["vss_type"]         = vssType;
@@ -47,8 +43,6 @@ struct DashboardConfig {
     QVector<DashboardSignal> SignalList;
 
     static DashboardConfig fromJson(const QJsonObject &o) {
-        static QMutex mutex;
-        QMutexLocker lock(&mutex);
         DashboardConfig c;
         c.Target         = o.value("Target").toString();
         c.Platform       = o.value("Platform").toString();
@@ -62,8 +56,6 @@ struct DashboardConfig {
     }
 
     QJsonObject toJson() const {
-        static QMutex mutex;
-        QMutexLocker lock(&mutex);
         QJsonObject o;
         o["Target"]         = Target;
         o["Platform"]       = Platform;

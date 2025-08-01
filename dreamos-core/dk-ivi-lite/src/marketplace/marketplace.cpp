@@ -301,7 +301,7 @@ void MarketplaceViewModel::confirmInstall()
               << QString("kubectl apply -f %1")
                    .arg(m_lastManifest.pullJobYaml)
               << QString("kubectl wait --for=condition=complete "
-                         "job/pull-%1 --timeout=300s")
+                         "job/pull-%1 --timeout=3000s")
                    .arg(app.name.toLower())
               << QString("kubectl delete job pull-%1 --ignore-not-found")
                    .arg(app.name.toLower());
@@ -375,7 +375,7 @@ void MarketplaceViewModel::confirmInstallPost(int idx)
     // update tracking json
     DataManager dm;
     QJsonArray arr = dm.load(m_lastSearchTerm);
-    qDebug() << "[MarketplaceViewModel::confirmInstallPost] Loaded " << m_lastSearchTerm << " installed services from";
+    qDebug() << "[MarketplaceViewModel::confirmInstallPost] Loaded " << m_lastSearchTerm;
 
     const AppInfo &app = m_lastApps[idx];
     bool exists = false;

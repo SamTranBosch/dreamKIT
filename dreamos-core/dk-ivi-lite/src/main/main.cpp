@@ -9,11 +9,41 @@
 #include "../controls/controls.hpp"
 #include "../library/vapiclient/vapiclient.hpp"
 
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QDebug>
+
+static void myMessageHandler(QtMsgType type,
+                             const QMessageLogContext &ctx,
+                             const QString &msg)
+{
+    QByteArray localMsg = msg.toLocal8Bit();
+    QString time = QDateTime::currentDateTime()
+                       .toString("yyyy-MM-dd hh:mm:ss.zzz");
+
+    const char* typeStr = "";
+    switch (type) {
+    case QtDebugMsg:    typeStr = "DEBUG";    break;
+    case QtWarningMsg:  typeStr = "WARNING";  break;
+    case QtCriticalMsg: typeStr = "CRITICAL"; break;
+    case QtFatalMsg:    typeStr = "FATAL";    break;
+    default:                                break;
+    }
+
+    fprintf(stderr, "[%s] [%s] %s\n",
+            qPrintable(time), typeStr, localMsg.constData());
+
+    if (type == QtFatalMsg)
+        abort();
+}
+
 int main(int argc, char *argv[])
 {
     // qputenv("QT_IM_MODULE", QByteArray("qtvirtualkeyboard"));
 
     QGuiApplication app(argc, argv);
+
+    qInstallMessageHandler(myMessageHandler);
 
     // VAPI Client Initilization
     VAPI_CLIENT.connectToServer(DK_VAPI_DATABROKER);

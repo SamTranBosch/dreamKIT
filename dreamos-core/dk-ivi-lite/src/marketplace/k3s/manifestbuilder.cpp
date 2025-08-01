@@ -124,11 +124,12 @@ spec:
       containers:
       - name: pull
         image: ${image}
+        imagePullPolicy: Always
         command: ["true"]
 )";
     QString pullYaml = QString(pullTpl)
             .replace("${name}",  lcName)
-            .replace("${node}",  node)
+            .replace("${node}",  nodeXIP)
             .replace("${image}", image);
 
     info.pullJobYaml = writeFile(
@@ -150,7 +151,7 @@ spec:
     spec:
       hostNetwork: true
       nodeSelector:
-        kubernetes.io/hostname: xip
+        kubernetes.io/hostname: ${node}
       restartPolicy: Never
       initContainers:
       - name: pull
@@ -169,6 +170,7 @@ spec:
 )";
         QString mirrorYaml = QString(mirrorTpl)
                 .replace("${name}",  lcName)
+                .replace("${node}",  nodeXIP)
                 .replace("${src}",   image)
                 .replace("${dst}",   mirrorImg);
         info.mirrorJobYaml = writeFile(

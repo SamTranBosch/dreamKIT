@@ -42,16 +42,17 @@ class InstalledVappsCheckThread : public QThread
     Q_OBJECT
 public:
     explicit InstalledVappsCheckThread(VappsAsync *parent);
-    void run() override;
+    void notifyState(bool ok);
     void triggerCheckAppStart(QString id, QString name);
+    void resetTriggerFlags();
 
+    static QString             m_appId;
+    static QString             m_appName;
+    static bool                m_istriggeredAppStart;
 signals:
     void resultReady(QString appId, bool isStarted, QString msg);
 
 private:
-    QString             m_appId;
-    QString             m_appName;
-    bool                m_istriggeredAppStart {false};
     VappsAsync         *m_serviceAsync {nullptr};
     QFileSystemWatcher *m_filewatcher  {nullptr};
 };
@@ -66,6 +67,7 @@ public:
     explicit VappsAsync();
 
     Q_INVOKABLE void initInstalledFromDB();
+    Q_INVOKABLE void updateInstalledList(const QJsonArray &arr);
     Q_INVOKABLE void executeServices(
         int appIdx, const QString name,
         const QString appId, bool isSubscribed);

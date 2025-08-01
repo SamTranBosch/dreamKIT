@@ -70,14 +70,12 @@ void Installer::runNext()
     // Prepend a command to dump environment and then run the actual command
     QString fullCmd = QString("echo 'PATH:' $PATH; echo 'KUBECONFIG:' $KUBECONFIG; %1").arg(cmd);
     m_proc.start("bash", {"-l", "-c", fullCmd});
-    
-    // Wait briefly and log stderr
-    if (!m_proc.waitForFinished(5000)) {
-        qWarning() << "[K3s::Installer] Process timed out";
-    }
-    QByteArray err = m_proc.readAllStandardError();
-    if (!err.isEmpty()) {
-        qWarning() << "[K3s::Installer] stderr:" << err;
+    if (!m_proc.waitForStarted(1000)) {
+        qWarning() << "[K3s::Installer] process did not start";
+        m_busy = false;
+        emit busyChanged(false);
+        emit finished(false);
+        return;
     }
 }
 
@@ -119,10 +117,10 @@ bool Installer::deploymentAvailable(const QString &deploymentId,
     const bool ok = proc.exitStatus() == QProcess::NormalExit
                     && proc.exitCode() == 0;
 
-    if (!ok)
-        qWarning() << "[Installer] kubectl wait failed for" << deploymentId
-                   << "exitCode=" << proc.exitCode()
-                   << "output:"   << out;
+    // if (!ok)
+    //     qWarning() << "[Installer] kubectl wait failed for" << deploymentId
+    //                << "exitCode=" << proc.exitCode()
+    //                << "output:"   << out;
 
     return ok;
 }

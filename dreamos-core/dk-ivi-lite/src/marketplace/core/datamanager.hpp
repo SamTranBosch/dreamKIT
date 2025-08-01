@@ -6,6 +6,9 @@
 #include <QJsonArray>
 #include <QList>
 #include <QMutex>
+#include <QRecursiveMutex>
+#include <QElapsedTimer>
+
 #include "dashboardconfig.hpp"
 
 extern QString DK_VCU_USERNAME;
@@ -35,10 +38,32 @@ public:
         QString rootFolder;
     };
 
-    QJsonArray load(const QString &target);
-    bool save(const QString &target, const QJsonArray &arr);
+    // optional second argument lets callers override the default 3-s
+    // wait time per call.
+    QJsonArray load(const QString &target,
+                    int timeoutMs = kJsonLockTimeoutMs);
+
+    bool save(const QString &target, const QJsonArray &arr,
+              int timeoutMs = kJsonLockTimeoutMs);
+
     static QList<AppInfo> fetchAppList(const FetchOptions &opt);
 
 private:
-    // helper utilities now live in Core::JsonStorage / Core::AppSerializer
+    // RAII helper with timeout
+    class MutexTryLocker
+    {
+    public:
+        MutexTryLocker(QRecursiveMutex *m, int t)
+            : m_mutex(m), m_locked(m && m->tryLock(t)) {}
+        ~MutexTryLocker() { if (m_locked) m_mutex->unlock(); }
+
+        Q_DISABLE_COPY_MOVE(MutexTryLocker)
+        bool locked() const { return m_locked; }
+    private:
+        QRecursiveMutex *m_mutex;
+        bool             m_locked;
+    };
+
+    static QRecursiveMutex s_jsonMutex;
+    static constexpr int   kJsonLockTimeoutMs = 3000;   // default 3 s
 };
