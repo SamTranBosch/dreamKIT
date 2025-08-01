@@ -43,3 +43,6 @@ jobs:
             ghcr.io/${{ env.OWNER }}/dk_appinstallservice:${{ env.TAG }}
             ghcr.io/${{ env.OWNER }}/dk_appinstallservice:latest
           platforms: linux/amd64,linux/arm64
+          # caching   scope dk-appinstallservice
+          cache-from: type=gha,scope=dk-appinstallservice
+          cache-to:   type=gha,scope=dk-appinstallservice,mode=max

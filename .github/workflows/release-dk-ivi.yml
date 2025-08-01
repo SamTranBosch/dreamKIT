@@ -53,3 +53,6 @@ jobs:
             ghcr.io/${{ env.OWNER }}/dk_ivi:${{ env.TAG }}
             ghcr.io/${{ env.OWNER }}/dk_ivi:latest
           platforms: linux/amd64,linux/arm64
+          # caching   scope dk-ivi
+          cache-from: type=gha,scope=dk-ivi
+          cache-to:   type=gha,scope=dk-ivi,mode=max
