@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dk-ivi
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dk-ivi
+  template:
+    metadata:
+      labels:
+        app: dk-ivi
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: xip
+      hostNetwork: true
+      volumes:
+      - name: dk-home
+        hostPath: { path: ${HOME_DIR}/.dk }
+      - name: x11-unix
+        hostPath: { path: /tmp/.X11-unix }
+      - name: dri
+        hostPath: { path: /dev/dri }
+      - name: kubectl-binary
+        hostPath:
+          path: /usr/local/bin/kubectl
+          type: File
+      - name: kube-config
+        hostPath:
+          path: ${HOME_DIR}/.kube/config
+          type: File
+      containers:
+      - name: dk-ivi
+        image: ${DOCKER_HUB_NAMESPACE}/dk_ivi:latest
+        imagePullPolicy: Always
+        env:
+        - { name: DISPLAY, value: "${DISPLAY}" }
+        - { name: XDG_RUNTIME_DIR, value: "${XDG_RUNTIME_DIR}" }
+        - { name: DKCODE, value: "dreamKIT" }
+        - { name: DK_USER, value: "${DK_USER}" }
+        - { name: DK_VIP, value: "${dk_vip_demo}" }
+        - { name: DK_DOCKER_HUB_NAMESPACE, value: "${DOCKER_HUB_NAMESPACE}" }
+        - { name: DK_ARCH, value: "${ARCH}" }
+        - { name: DK_CONTAINER_ROOT, value: "/app/.dk/" }
+        volumeMounts:
+        - { name: dk-home,  mountPath: /app/.dk }
+        - { name: x11-unix, mountPath: /tmp/.X11-unix }
+        - { name: dri,      mountPath: /dev/dri }
+        - name: kubectl-binary
+          mountPath: /usr/local/bin/kubectl
+          readOnly: true
+        - name: kube-config
+          mountPath: /root/.kube/config
+          readOnly: true

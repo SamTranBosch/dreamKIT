@@ -19,9 +19,11 @@ echo "Env Variables:"
 echo "HOME_DIR: $HOME_DIR"
 echo "DOCKER_HUB_NAMESPACE: $DOCKER_HUB_NAMESPACE"
 
+k3s-killall.sh
+k3s-uninstall.sh
 
 echo "Stopping all running containers..."
-docker stop $(docker ps -q)
+docker kill $(docker ps -q)
 
 echo "Removing all stopped Docker containers..."
 docker rm $(docker ps -aq)

@@ -2,16 +2,26 @@
 # K3s Agent Server: Setup and prepare offline agent install package for amd64 and arm64 workers
 # Usage: sudo ./k3s-master-prepare.sh <network_interface>
 
-set -e
+# Colors and formatting
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m' # No Color
 
 if [ "$EUID" -ne 0 ]; then
-    echo "This script must be run as root (sudo)."
+    echo -e "${YELLOW}${BOLD}This script must be run as root (sudo).${NC}"
     exit 1
 fi
 
 if [ $# -ne 1 ]; then
-    echo "Usage: sudo $0 <network_interface>"
-    echo "Example: sudo $0 eth0"
+    echo -e "${YELLOW}${BOLD}Usage: sudo $0 <network_interface>.${NC}"
+    echo -e "${YELLOW}${BOLD}Example: sudo $0 eth0.${NC}"
     exit 1
 fi
 
@@ -19,23 +29,23 @@ SERVER_NET_IF="$1"
 
 SERVER_IP=$(ip -4 addr show "$SERVER_NET_IF" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
 if [ -z "$SERVER_IP" ]; then
-    echo "Could not find an IP address on interface '$SERVER_NET_IF'. Please check your network interface."
+    echo -e "${YELLOW}${BOLD}Could not find an IP address on interface '$SERVER_NET_IF'. Please check your network interface.${NC}"
     exit 1
 fi
 
 # 1. Install k3s server (if not already installed)
 if ! command -v k3s &> /dev/null; then
-    echo "Installing K3s server..."
+    echo -e "${BLUE} ${ARROW} Installing K3s server...${NC}"
     curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --node-name=xip --advertise-address ${SERVER_IP} --tls-san ${SERVER_IP}" sh -
 else
-    echo "K3s server is already installed."
+    echo -e "${BLUE} ${ARROW} K3s server is already installed.${NC}"
 fi
 
 # 2.a) Change kubeconfig file permissions
 sudo chown $USER:$USER /etc/rancher/k3s/k3s.yaml
 # sudo chmod 644 /etc/rancher/k3s/k3s.yaml
 # 2.b) For regular user access, copy the kubeconfig file
-mkdir -p ~/.kube
+sudo mkdir -p ~/.kube
 sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
 sudo chown $(id -u):$(id -g) ~/.kube/config
 
@@ -43,17 +53,18 @@ sudo chown $(id -u):$(id -g) ~/.kube/config
 # 3. Extract node token and server IP (from the provided interface)
 NODE_TOKEN=$(sudo cat /var/lib/rancher/k3s/server/node-token)
 
-echo "Server IP ($SERVER_NET_IF): $SERVER_IP"
-echo "Node Token: $NODE_TOKEN"
+echo -e "${BLUE} ${ARROW} Server IP ($SERVER_NET_IF): $SERVER_IP.${NC}"
+echo -e "${BLUE} ${ARROW} Node Token: $NODE_TOKEN.${NC}"
 
 # 3. Download K3s binaries for both amd64 and arm64
-kubectl apply -f yaml_dir/k3s-rancher-mirrored-pause-mirror.yaml
+sudo kubectl delete -f manifests/k3s-rancher-mirrored-pause-mirror.yaml --ignore-not-found
+sudo kubectl apply -f manifests/k3s-rancher-mirrored-pause-mirror.yaml
 
 # === ADJUST THESE ===  
 NODE_IP="192.168.56.49"  
 NODE_NET_IF="eth0"
 # ====================
-echo "Prepare package for S32G with IP ($NODE_NET_IF): $NODE_IP"
+echo -e "${BLUE} ${ARROW} Prepare package for S32G with IP ($NODE_NET_IF): $NODE_IP.${NC}"
 
 
 # 4. Prepare agent service template (with placeholders)
@@ -108,18 +119,18 @@ EOF
 
 
 # 4) Configure containerd as a Mirror
-# With that in place, any Pod spec referring to ghcr.io/... will first try your local mirror at 192.168.56.48:5000, then fall back to the real ghcr.io if the mirror is missing.
+# With that in place, any Pod spec referring to ghcr.io/... will first try your local mirror at 192.168.56.2:5000, then fall back to the real ghcr.io if the mirror is missing.
 # You still must push the image to your local registry once (same docker pull / tag / push steps above), but future pulls even using the original ghcr.io/... name will come from your local mirror.
 cat >../nxp-s32g/scripts/registries.yaml <<EOF
 mirrors:
   "docker.io":
     endpoint:
-      - "http://192.168.56.48:5000"
+      - "http://192.168.56.2:5000"
   "ghcr.io":
     endpoint:
-      - "http://192.168.56.48:5000"
+      - "http://192.168.56.2:5000"
 configs:
-  "192.168.56.48:5000":
+  "192.168.56.2:5000":
     tls:
       insecure_skip_verify: true
 EOF

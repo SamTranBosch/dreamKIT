@@ -146,3 +146,11 @@ get_dreamkit_code 92 serialNo:  "7de10f4b"
 
 curl -v http://192.168.56.48:5000/v2/_catalog
 ```
+
+```shell
+
+sudo systemctl restart k3s
+sudo journalctl -u k3s -f
+sudo systemctl status k3s
+
+```
