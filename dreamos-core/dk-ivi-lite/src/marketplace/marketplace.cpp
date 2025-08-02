@@ -9,9 +9,6 @@
 #include <QProcessEnvironment>
 
 #include "marketplace.hpp"
-#include "core/datamanager.hpp"
-#include "k3s/manifestbuilder.hpp"
-#include "k3s/installer.hpp"
 
 using namespace Async;
 using K3s::ManifestBuilder;

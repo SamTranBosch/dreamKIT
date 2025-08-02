@@ -1,6 +1,6 @@
 #include "installedvapps.hpp"
-#include "../marketplace/core/datamanager.hpp"
-#include "../marketplace/k3s/installer.hpp"
+#include "../utils/core/datamanager.hpp"
+#include "../utils/k3s/installer.hpp"
 #include "../utils/notifications/notificationmanager.hpp"
 
 #include <QJsonDocument>

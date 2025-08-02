@@ -6,13 +6,13 @@
 #include <QDir>
 
 // bring in your existing fetch helpers:
-#include "async/asyncjob.hpp"
+#include "../utils/async/asyncjob.hpp"
 
-#include "core/fetching.hpp"
-#include "core/datamanager.hpp"
+#include "../utils/core/fetching.hpp"
+#include "../utils/core/datamanager.hpp"
 
-#include "k3s/manifestbuilder.hpp"
-#include "k3s/installer.hpp"
+#include "../utils/k3s/manifestbuilder.hpp"
+#include "../utils/k3s/installer.hpp"
 
 class AppListModel : public QAbstractListModel {
     Q_OBJECT

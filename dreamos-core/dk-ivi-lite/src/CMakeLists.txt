@@ -18,17 +18,17 @@ qt_add_executable(dk_ivi
     controls/controls.cpp
     digitalauto/digitalauto.cpp
     marketplace/marketplace.cpp
-    marketplace/async/asyncjob.cpp
-    marketplace/core/datamanager.cpp
-    marketplace/core/fetching.cpp
-    marketplace/core/jsonstorage.cpp
-    marketplace/core/appserializer.cpp
-    marketplace/k3s/manifestbuilder.cpp
-    marketplace/k3s/installer.cpp
     installedservices/installedservices.cpp
     installedservices/unsafeparamcheck.cpp
     installedvapps/installedvapps.cpp
-    library/vapiclient/vapiclient.cpp
+    utils/async/asyncjob.cpp
+    utils/core/datamanager.cpp
+    utils/core/fetching.cpp
+    utils/core/jsonstorage.cpp
+    utils/core/appserializer.cpp
+    utils/k3s/manifestbuilder.cpp
+    utils/k3s/installer.cpp
+    utils/vapiclient/vapiclient.cpp
     utils/notifications/notificationmanager.cpp
 )
 

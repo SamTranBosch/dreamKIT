@@ -4,7 +4,7 @@
 #include <QMetaObject>
 #include <QString>
 
-#include "library/vapiclient/vapiclient.hpp"
+#include "../utils/vapiclient/vapiclient.hpp"
 
 ControlsAsync::ControlsAsync()
 {

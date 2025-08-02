@@ -7,7 +7,7 @@
 #include "../installedservices/installedservices.hpp"
 #include "../installedvapps/installedvapps.hpp"
 #include "../controls/controls.hpp"
-#include "../library/vapiclient/vapiclient.hpp"
+#include "../utils/vapiclient/vapiclient.hpp"
 #include "../utils/notifications/notificationmanager.hpp"
 
 #include <QCoreApplication>
