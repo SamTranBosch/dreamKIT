@@ -1,6 +1,7 @@
 #include "installedvapps.hpp"
 #include "../marketplace/core/datamanager.hpp"
 #include "../marketplace/k3s/installer.hpp"
+#include "../utils/notifications/notificationmanager.hpp"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -248,10 +249,13 @@ void VappsAsync::removeServices(int index)
     if (index < 0 || index >= installedVappsList.size()) return;
 
     const QString appId = installedVappsList[index].id;
+    const QString appName = installedVappsList[index].name.toLower();
     const QString deployYaml = QString("%1/%2/%2_deployment.yaml")
                                .arg(DK_INSTALLED_APPS_FOLDER, appId);
 
     auto *chain = new Async::Chain(this);
+    // Show deletion progress
+    QString taskId = START_TASK("Removing App", "Removing " + appName + "...");
 
     /* step-0 : update installedapps.json (worker thread) */
     chain->add([appId](){
@@ -263,6 +267,8 @@ void VappsAsync::removeServices(int index)
                 out.append(v);
         dm.save("vehicle", out);
     });
+
+    UPDATE_TASK(taskId, 50, "Cleaning up deployment...");
 
     /* step-1 : kubectl delete in GUI thread */
     chain->add([deployYaml](){
@@ -296,6 +302,8 @@ void VappsAsync::removeServices(int index)
     });    
 
     chain->start();
+
+    COMPLETE_TASK(taskId, appName + " removed successfully!");
 }
 
 // ───────────────────────────────────────────────────────────────

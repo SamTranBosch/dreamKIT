@@ -115,6 +115,29 @@ ApplicationWindow {
         }
     }
 
+    // Modern Notification Overlay - Load as a component
+    Loader {
+        id: notificationLoader
+        anchors.fill: parent
+        source: "qrc:/untitled2/utils/notifications/notificationoverlay.qml"
+        
+        onLoaded: {
+            // Configure the notification overlay
+            item.notificationManagerInstance = globalNotificationManager
+            item.position = "topRight"
+            item.margin = 24
+            item.notificationWidth = 380
+            item.maxVisibleNotifications = 5
+            item.compactMode = false
+        }
+        
+        onStatusChanged: {
+            if (status === Loader.Error) {
+                console.log("Failed to load NotificationOverlay:", sourceComponent.errorString())
+            }
+        }
+    }
+
     // Subtle corner accent
     Rectangle {
         width: 100
@@ -158,6 +181,37 @@ ApplicationWindow {
                 ctx.lineTo(0, height)
                 ctx.lineTo(50, height)
                 ctx.stroke()
+            }
+        }
+    }
+    
+    // Development test button (remove in production)
+    Rectangle {
+        width: 120
+        height: 40
+        color: "#00D4AA20"
+        border.color: "#00D4AA"
+        border.width: 1
+        radius: 8
+        anchors.bottom: parent.bottom
+        anchors.right: parent.right
+        anchors.margins: 20
+        visible: Qt.application.arguments.indexOf("--debug") !== -1
+        
+        Text {
+            anchors.centerIn: parent
+            text: "Test Notifications"
+            color: "#00D4AA"
+            font.family: "Segoe UI"
+            font.pixelSize: 12
+        }
+        
+        MouseArea {
+            anchors.fill: parent
+            onClicked: {
+                if (notificationLoader.item) {
+                    notificationLoader.item.testNotifications()
+                }
             }
         }
     }

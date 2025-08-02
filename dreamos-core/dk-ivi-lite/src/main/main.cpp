@@ -8,6 +8,7 @@
 #include "../installedvapps/installedvapps.hpp"
 #include "../controls/controls.hpp"
 #include "../library/vapiclient/vapiclient.hpp"
+#include "../utils/notifications/notificationmanager.hpp"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -45,8 +46,17 @@ int main(int argc, char *argv[])
 
     qInstallMessageHandler(myMessageHandler);
 
-    // VAPI Client Initilization
+    // VAPI Client Initialization
     VAPI_CLIENT.connectToServer(DK_VAPI_DATABROKER);
+    
+    // Register the notification manager BEFORE creating the engine
+    qmlRegisterSingletonType<NotificationManager>("NotificationManager", 1, 0, "NotificationManager",
+        [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
+            Q_UNUSED(engine)
+            Q_UNUSED(scriptEngine)
+            return &NotificationManager::instance();
+        });
+
     // Pages
     qmlRegisterType<DigitalAutoAppAsync>("DigitalAutoAppAsync", 1, 0, "DigitalAutoAppAsync");
     qmlRegisterType<CategoryListModel>("MyApp",1,0,"CategoryListModel");
@@ -58,6 +68,10 @@ int main(int argc, char *argv[])
     qmlRegisterType<ControlsAsync>("ControlsAsync", 1, 0, "ControlsAsync");
 
     QQmlApplicationEngine engine;
+    
+    // Expose global notification manager instance to QML context
+    engine.rootContext()->setContextProperty("globalNotificationManager", &NotificationManager::instance());
+    
     const QUrl url1(QStringLiteral("qrc:/untitled2/main/main.qml"));
     const QUrl url2(QStringLiteral("qrc:/main/main.qml"));
 

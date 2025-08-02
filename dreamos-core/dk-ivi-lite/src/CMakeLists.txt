@@ -29,6 +29,7 @@ qt_add_executable(dk_ivi
     installedservices/unsafeparamcheck.cpp
     installedvapps/installedvapps.cpp
     library/vapiclient/vapiclient.cpp
+    utils/notifications/notificationmanager.cpp
 )
 
 qt_add_qml_module(dk_ivi
@@ -49,6 +50,7 @@ qt_add_qml_module(dk_ivi
         marketplace/SearchBar.qml
         installedservices/installedservices.qml
         installedvapps/installedvapps.qml
+        utils/notifications/notificationoverlay.qml
         resource/customwidgets/CustomBtn1.qml
         resource/customwidgets/CustomBtn2.qml
         resource/customwidgets/IconBtn1.qml

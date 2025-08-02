@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import NotificationManager 1.0
 
 Rectangle {
     id: settings_page

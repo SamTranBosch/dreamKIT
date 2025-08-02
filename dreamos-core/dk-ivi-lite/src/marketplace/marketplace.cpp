@@ -128,7 +128,7 @@ void CategoryListModel::loadFromJsonFile(const QString &filePath) {
         QJsonArray arr;
         QJsonObject def;
         def["name"]            = "BGSV Marketplace";
-        def["marketplace_url"] = "https://store-be.digitalauto.tech";
+        def["marketplace_url"] = "https://store-be.sdv.digital.auto";
         def["login_url"]       = "";
         arr.append(def);
         if (f.open(QIODevice::WriteOnly)) {
