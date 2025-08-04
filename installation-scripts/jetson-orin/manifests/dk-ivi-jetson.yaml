@@ -29,6 +29,14 @@ spec:
         hostPath:
           path: ${HOME_DIR}/.kube/config
           type: File
+      - name: docker-sock
+        hostPath:
+          path: /var/run/docker.sock
+          type: Socket
+      - name: docker-binary
+        hostPath:
+          path: /usr/bin/docker
+          type: File
       containers:
       - name: dk-ivi
         image: ${DOCKER_HUB_NAMESPACE}/dk_ivi:latest
@@ -51,4 +59,9 @@ spec:
           readOnly: true
         - name: kube-config
           mountPath: /root/.kube/config
+          readOnly: true
+        - name: docker-sock
+          mountPath: /var/run/docker.sock
+        - name: docker-binary
+          mountPath: /usr/bin/docker
           readOnly: true
