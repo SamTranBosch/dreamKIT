@@ -371,7 +371,7 @@ main() {
     # Step 8   K3s-based installation
     ###############################################################################
     show_step 8 "K3s-based installation" "k3s master installation & preparation for local registry"
-    sudo $CURRENT_DIR/scripts/k3s-master-prepare.sh eth0
+    sudo scripts/k3s-master-prepare.sh eth0
     if [ $? -ne 0 ]; then
         show_error "Failed to prepare K3s master. Please check the logs."
         exit 1
@@ -379,9 +379,24 @@ main() {
     show_success "K3s master prepared successfully"
     
     ###############################################################################
-    # Step 9   SDV Runtime
+    # Step 9   NXP-S32G setup (optional)
     ###############################################################################
-    show_step 9 "SDV Runtime" "Setting up Software Defined Vehicle runtime environment"
+    show_step 9 "NXP-S32G setup" "k3s-agent installation & relavant stuff"
+    nxp_s32g_setup="false"
+    echo -e "\n${YELLOW}Ensure the connection to ECU at ip_address: 192.168.56.49 is good ? [y/N]: ${NC}"
+    read -r nxp_s32g_setup
+    
+    if [[ "$nxp_s32g_setup" =~ ^[Yy]$ ]]; then
+        show_info "Calling NXP-S32G setup script..."
+        run_with_feedback "$CURRENT_DIR/scripts/k3s-agent-offline-install.sh" "NXP-S32G setup completed" "NXP-S32G setup failed"
+    else
+        show_info "NXP-S32G setup skipped (you can install later with calling './scripts/k3s-agent-offline-install.sh')"
+    fi
+
+    ###############################################################################
+    # Step 10   SDV Runtime
+    ###############################################################################
+    show_step 10 "SDV Runtime" "Setting up Software Defined Vehicle runtime environment"
 
     run_with_feedback \
     "sudo kubectl delete deployment sdv-runtime --ignore-not-found" \
@@ -394,9 +409,9 @@ main() {
     "SDV runtime failed to start"
 
     ###############################################################################
-    # Step 10   DreamKit Manager
+    # Step 11   DreamKit Manager
     ###############################################################################
-    show_step 10 "DreamKit Manager" "Installing core management services"
+    show_step 11 "DreamKit Manager" "Installing core management services"
 
     run_with_feedback \
     "sudo kubectl delete deployment dk-manager --ignore-not-found" \
@@ -409,9 +424,9 @@ main() {
     "Manager failed to start"
 
     ###############################################################################
-    # Step 11   IVI Interface (optional)
+    # Step 12   IVI Interface (optional)
     ###############################################################################
-    show_step 11 "IVI Interface" "Configuring In-Vehicle Infotainment system"
+    show_step 12 "IVI Interface" "Configuring In-Vehicle Infotainment system"
 
     # Check for dk_ivi parameter
     dk_ivi_value=""
@@ -447,21 +462,6 @@ main() {
         "IVI failed to start"
     else
         show_info "IVI installation skipped (you can install later with './dk_install dk_ivi=true')"
-    fi
-
-    ###############################################################################
-    # Step 12   NXP-S32G setup (optional)
-    ###############################################################################
-    show_step 12 "NXP-S32G setup" "k3s-agent installation & relavant stuff"
-    nxp_s32g_setup="false"
-    echo -e "\n${YELLOW}Ensure the connection to ECU at ip_address: 192.168.56.49 is good ? [y/N]: ${NC}"
-    read -r nxp_s32g_setup
-    
-    if [[ "$nxp_s32g_setup" =~ ^[Yy]$ ]]; then
-        show_info "Calling NXP-S32G setup script..."
-        run_with_feedback "$CURRENT_DIR/scripts/k3s-agent-offline-install.sh" "NXP-S32G setup completed" "NXP-S32G setup failed"
-    else
-        show_info "NXP-S32G setup skipped (you can install later with calling './scripts/k3s-agent-offline-install.sh')"
     fi
 
     ###############################################################################
