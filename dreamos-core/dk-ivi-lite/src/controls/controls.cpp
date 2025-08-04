@@ -6,9 +6,39 @@
 
 #include "../utils/vapiclient/vapiclient.hpp"
 
+//------------------------------------------------------------------------------
+// Vehicle API keys
+//
+// These inline constants define the available keys for the vehicle Software Update API.
+// Using these constants throughout your code enables code completion and minimizes errors.
+//------------------------------------------------------------------------------
+QString DK_VSS_VER = "VSS_4.0";
+namespace VehicleAPI {
+  inline char* V_Bo_Lights_Beam_Low_IsOn               = "Vehicle.Body.Lights.Beam.Low.IsOn";
+  inline char* V_Bo_Lights_Beam_High_IsOn              = "Vehicle.Body.Lights.Beam.High.IsOn";
+  inline char* V_Bo_Lights_Brake_IsOn                  = "Vehicle.Body.Lights.Brake.IsActive";
+  inline char* V_Bo_Lights_Hazard_IsSignaling          = "Vehicle.Body.Lights.Hazard.IsSignaling";
+  inline char* V_Ca_HVAC_Station_R1_Driver_FanSpeed    = "Vehicle.Cabin.HVAC.Station.Row1.Passenger.FanSpeed";
+  inline char* V_Ca_HVAC_Station_R1_Passenger_FanSpeed = "Vehicle.Cabin.HVAC.Station.Row1.Driver.FanSpeed";
+  inline char* V_Ca_Seat_R1_DriverSide_Position        = "Vehicle.Cabin.Seat.Row1.DriverSide.Position";
+}
+
+//------------------------------------------------------------------------------
 ControlsAsync::ControlsAsync()
 {
     qDebug() << __func__ << __LINE__ << "  constructing ControlsAsync";
+
+    // Initialize the VAPI client instance.
+    DK_VSS_VER = qgetenv("DK_VSS_VER");
+
+    if(DK_VSS_VER == "VSS_3.0") {
+      VehicleAPI::V_Bo_Lights_Beam_Low_IsOn               = "Vehicle.Body.Lights.IsLowBeamOn";
+      VehicleAPI::V_Bo_Lights_Beam_High_IsOn              = "Vehicle.Body.Lights.IsHighBeamOn";
+      VehicleAPI::V_Bo_Lights_Hazard_IsSignaling          = "Vehicle.Body.Lights.IsHazardOn";
+      VehicleAPI::V_Ca_HVAC_Station_R1_Driver_FanSpeed    = "Vehicle.Cabin.HVAC.Station.Row1.Left.FanSpeed";
+      VehicleAPI::V_Ca_HVAC_Station_R1_Passenger_FanSpeed = "Vehicle.Cabin.HVAC.Station.Row1.Right.FanSpeed";
+      VehicleAPI::V_Ca_Seat_R1_DriverSide_Position        = "Vehicle.Cabin.Seat.Row1.Pos1.Position";
+    }
 
     // 1) Build the list of signal paths we want to subscribe to:
     std::vector<std::string> signalPaths = {
