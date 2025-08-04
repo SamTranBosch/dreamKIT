@@ -211,7 +211,7 @@ void MarketplaceViewModel::search(const QString &term)
     opt.loginUrl   = m_cats->data(mi, CategoryListModel::LoginUrlRole) .toString();
     opt.category   = m_lastSearchTerm;
     opt.page       = 1;
-    opt.limit      = 20;
+    opt.limit      = 100;
     opt.rootFolder = DK_CONTAINER_ROOT + "dk_marketplace/";
 
     // --- run fetch in background ---------------------------
