@@ -9,5 +9,7 @@ sshpass -p '' ssh -o StrictHostKeyChecking=no root@192.168.56.49 'chmod +x ~/.dk
 
 sshpass -p '' ssh -o StrictHostKeyChecking=no root@192.168.56.49 './.dk/nxp-s32g/dk_install.sh'
 
+sshpass -p '' ssh -o StrictHostKeyChecking=no root@192.168.56.49 'reboot'
+
 # Delete the node for new one connected
 sudo kubectl delete node vip
