@@ -115,25 +115,48 @@ ApplicationWindow {
         }
     }
 
-    // Modern Notification Overlay - Load as a component
+    // Modern Notification Overlay - MOVE THIS TO THE VERY END OF ApplicationWindow
     Loader {
         id: notificationLoader
         anchors.fill: parent
         source: "qrc:/untitled2/utils/notifications/notificationoverlay.qml"
+        z: 10000 // Ensure it's above everything else
         
         onLoaded: {
-            // Configure the notification overlay
-            item.notificationManagerInstance = globalNotificationManager
-            item.position = "topRight"
-            item.margin = 24
-            item.notificationWidth = 380
-            item.maxVisibleNotifications = 5
-            item.compactMode = false
+            console.log("[Main] NotificationOverlay loaded successfully")
+            console.log("[Main] Item:", item)
+            console.log("[Main] globalNotificationManager:", globalNotificationManager)
+            
+            if (item && globalNotificationManager) {
+                // Configure the notification overlay
+                item.notificationManagerInstance = globalNotificationManager
+                item.position = "topRight"
+                item.margin = 24
+                item.notificationWidth = 380
+                item.maxVisibleNotifications = 5
+                item.compactMode = false
+                console.log("[Main] NotificationOverlay configured successfully")
+                
+                // Test immediate notification
+                // Qt.callLater(function() {
+                //     console.log("[Main] Testing immediate notification...")
+                //     globalNotificationManager.info("System Ready", "Notification system initialized")
+                // }, 500)
+            } else {
+                console.log("[Main] ERROR: Configuration failed")
+                console.log("[Main] item is null:", !item)
+                console.log("[Main] globalNotificationManager is null:", !globalNotificationManager)
+            }
         }
         
         onStatusChanged: {
+            console.log("[Main] NotificationLoader status changed to:", status)
             if (status === Loader.Error) {
-                console.log("Failed to load NotificationOverlay:", sourceComponent.errorString())
+                console.log("[Main] NotificationLoader failed to load")
+                // Try alternative path
+                source = "qrc:/utils/notifications/notificationoverlay.qml"
+            } else if (status === Loader.Ready && item) {
+                console.log("[Main] NotificationLoader is ready with valid item")
             }
         }
     }

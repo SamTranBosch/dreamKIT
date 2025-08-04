@@ -93,8 +93,8 @@ class MarketplaceViewModel : public QObject {
     void setCurrentCategory(int idx);   // setter for Q_PROPERTY
     void appSelected(int idx);
     void confirmInstall();
-    void confirmInstallPre(int idx);
-    void confirmInstallPost(int idx);
+    bool confirmInstallPre(int idx);
+    bool confirmInstallPost(int idx);
     void cancelInstall();
 
   signals:

@@ -23,24 +23,86 @@ Item {
     property int animationDuration: 400
     property int staggerDelay: 80
     
+    // Replace the Component.onCompleted in notificationoverlay.qml with this:
+
     Component.onCompleted: {
+        console.log("[NotificationOverlay] Component completed")
+        console.log("[NotificationOverlay] notificationManagerInstance:", notificationManagerInstance)
+        console.log("[NotificationOverlay] Parent:", parent)
+        console.log("[NotificationOverlay] Visible:", visible)
+        console.log("[NotificationOverlay] Z:", z)
+        
         // Connect to the global notification manager
         if (notificationManagerInstance) {
+            console.log("[NotificationOverlay] Connecting to manager immediately...")
             connectToManager()
+        } else {
+            console.log("[NotificationOverlay] No notificationManagerInstance, waiting...")
+            
+            // Try multiple times with increasing delays
+            var attempts = 0
+            var maxAttempts = 10
+            
+            function tryConnect() {
+                attempts++
+                console.log("[NotificationOverlay] Connection attempt", attempts, "of", maxAttempts)
+                
+                if (notificationManagerInstance) {
+                    console.log("[NotificationOverlay] Found notificationManagerInstance on attempt", attempts)
+                    connectToManager()
+                    return
+                }
+                
+                if (attempts < maxAttempts) {
+                    Qt.callLater(tryConnect, attempts * 100)
+                } else {
+                    console.log("[NotificationOverlay] ERROR: Failed to find notificationManagerInstance after", maxAttempts, "attempts")
+                }
+            }
+            
+            Qt.callLater(tryConnect, 100)
         }
     }
-    
+
+    // Also update the connectToManager function:
     function connectToManager() {
-        if (!notificationManagerInstance) return
+        if (!notificationManagerInstance) {
+            console.log("[NotificationOverlay] ERROR: notificationManagerInstance is null in connectToManager")
+            return
+        }
         
-        // Connect to notification signals
-        notificationManagerInstance.notificationAdded.connect(handleNotificationAdded)
-        notificationManagerInstance.notificationDismissed.connect(handleNotificationDismissed)
-        notificationManagerInstance.notificationUpdated.connect(handleNotificationUpdated)
-        notificationManagerInstance.allNotificationsDismissed.connect(handleAllDismissed)
+        console.log("[NotificationOverlay] Connecting to notification manager...")
+        console.log("[NotificationOverlay] Manager object:", notificationManagerInstance)
+        
+        try {
+            // Connect to notification signals
+            notificationManagerInstance.notificationAdded.connect(handleNotificationAdded)
+            notificationManagerInstance.notificationDismissed.connect(handleNotificationDismissed)
+            notificationManagerInstance.notificationUpdated.connect(handleNotificationUpdated)
+            notificationManagerInstance.allNotificationsDismissed.connect(handleAllDismissed)
+            
+            console.log("[NotificationOverlay] Successfully connected all signals")
+            
+            // Test connection by triggering a notification
+            // Qt.callLater(function() {
+            //     console.log("[NotificationOverlay] Testing connection with startup notification...")
+            //     notificationManagerInstance.success("Notification System", "Successfully connected to UI")
+            // }, 200)
+            
+        } catch (error) {
+            console.log("[NotificationOverlay] ERROR connecting signals:", error)
+        }
     }
-    
+
+    // Update handleNotificationAdded with more debugging:
     function handleNotificationAdded(id, title, message, level, duration, category, progress, actionText, actionId) {
+        console.log("[NotificationOverlay] *** handleNotificationAdded called ***")
+        console.log("[NotificationOverlay] ID:", id)
+        console.log("[NotificationOverlay] Title:", title)
+        console.log("[NotificationOverlay] Message:", message)
+        console.log("[NotificationOverlay] Level:", level)
+        console.log("[NotificationOverlay] Model count before:", notificationModel.count)
+        
         var notification = {
             id: id,
             title: title,
@@ -55,15 +117,26 @@ Item {
             visible: false
         }
         
-        notificationModel.append(notification)
-        
-        // Animate in with stagger
-        var index = notificationModel.count - 1
-        animateNotificationIn(index)
-        
-        // Limit visible notifications
-        while (notificationModel.count > maxVisibleNotifications) {
-            notificationModel.remove(0, 1)
+        try {
+            notificationModel.append(notification)
+            console.log("[NotificationOverlay] Model count after append:", notificationModel.count)
+            
+            // Animate in with stagger
+            var index = notificationModel.count - 1
+            console.log("[NotificationOverlay] Animating notification at index:", index)
+            
+            Qt.callLater(function() {
+                animateNotificationIn(index)
+            }, 50)
+            
+            // Limit visible notifications
+            while (notificationModel.count > maxVisibleNotifications) {
+                console.log("[NotificationOverlay] Removing excess notification")
+                notificationModel.remove(0, 1)
+            }
+            
+        } catch (error) {
+            console.log("[NotificationOverlay] ERROR in handleNotificationAdded:", error)
         }
     }
     

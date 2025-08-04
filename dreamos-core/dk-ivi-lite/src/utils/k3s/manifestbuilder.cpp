@@ -40,8 +40,13 @@ ManifestInfo ManifestBuilder::write(const AppInfo &app)
     QString node    = (target.isEmpty() || target == nodeXIP)
                         ? nodeXIP : nodeVIP;
     info.isRemoteNode = (node == nodeVIP);
+    info.deployNodeName = (info.isRemoteNode ? nodeVIP : nodeXIP);
 
+    qDebug() << "[ManifestBuilder::write] Instaling on node:"
+             << info.deployNodeName
+             << "isRemoteNode:" << info.isRemoteNode;
     const QString lcName = app.name.toLower();
+    const QString appId  = app.id;
     const QString image  = app.dashboardConfig.DockerImageURL;
 
     // ── environment list ────────────────────────────────────────────
@@ -99,7 +104,7 @@ ${args}
         stdin: true
 )";
     QString deployYaml = QString(deployTpl)
-            .replace("${name}",  lcName)
+            .replace("${name}",  appId)
             .replace("${node}",  node)
             .replace("${image}", image)
             .replace("${env}",   envBlock)
@@ -128,8 +133,8 @@ spec:
         command: ["true"]
 )";
     QString pullYaml = QString(pullTpl)
-            .replace("${name}",  lcName)
-            .replace("${node}",  nodeXIP)
+            .replace("${name}",  appId)
+            .replace("${node}",  node)
             .replace("${image}", image);
 
     info.pullJobYaml = writeFile(
@@ -169,7 +174,7 @@ spec:
           - "docker://${dst}"
 )";
         QString mirrorYaml = QString(mirrorTpl)
-                .replace("${name}",  lcName)
+                .replace("${name}",  appId)
                 .replace("${node}",  nodeXIP)
                 .replace("${src}",   image)
                 .replace("${dst}",   mirrorImg);

@@ -9,6 +9,7 @@
 #include <QProcessEnvironment>
 
 #include "marketplace.hpp"
+#include "../utils/notifications/notificationmanager.hpp"
 
 using namespace Async;
 using K3s::ManifestBuilder;
@@ -282,57 +283,76 @@ void MarketplaceViewModel::confirmInstall()
     /* ----------------------------------------------------------- *
      * step-0  : heavy disk-IO (worker thread)                     *
      * ----------------------------------------------------------- */
-    m_installChain->add([this, idx](){
-        confirmInstallPre(idx);
+    m_installChain->add([this, idx]()->bool{
+        return confirmInstallPre(idx);
     });
 
-    /* ----------------------------------------------------------- *
-     * step-1  : build cmds + run kubectl in GUI thread            *
-     *           (BlockingQueuedConnection guarantees sequential)  *
-     * ----------------------------------------------------------- */
-    m_installChain->add([this, app](){
-
+    /* ------------------------------------------------------------------ *
+     *  step-1  : Chain-step : pull / mirror images                       *
+     * ------------------------------------------------------------------ */
+    m_installChain->add([this, app]()->bool        //  returns bool !
+    {
+        /* 1) build command list --------------------------------------- */
         QStringList cmds;
-        cmds  << QString("kubectl delete job pull-%1 --ignore-not-found")
-                   .arg(app.name.toLower())
-              << QString("kubectl apply -f %1")
-                   .arg(m_lastManifest.pullJobYaml)
-              << QString("kubectl wait --for=condition=complete "
-                         "job/pull-%1 --timeout=3000s")
-                   .arg(app.name.toLower())
-              << QString("kubectl delete job pull-%1 --ignore-not-found")
-                   .arg(app.name.toLower());
 
         if (m_lastManifest.isRemoteNode) {
             cmds << QString("kubectl delete job mirror-%1 --ignore-not-found")
-                        .arg(app.name.toLower())
-                 << QString("kubectl apply -f %1")
+                        .arg(app.id)
+                << QString("kubectl apply -f %1")
                         .arg(m_lastManifest.mirrorJobYaml)
-                 << QString("kubectl wait --for=condition=complete "
+                << QString("kubectl wait --for=condition=complete "
                             "job/mirror-%1 --timeout=300s")
-                        .arg(app.name.toLower())
-                 << QString("kubectl delete job mirror-%1 --ignore-not-found")
-                        .arg(app.name.toLower());
+                        .arg(app.id)
+                << QString("kubectl delete job mirror-%1 --ignore-not-found")
+                        .arg(app.id);
         }
 
-        /* --- jump to GUI thread but block until it finishes --- */
+        cmds << QString("kubectl delete job pull-%1 --ignore-not-found")
+                    .arg(app.id)
+            << QString("kubectl apply -f %1")
+                    .arg(m_lastManifest.pullJobYaml)
+            << QString("kubectl wait --for=condition=complete "
+                        "job/pull-%1 --timeout=3000s")
+                    .arg(app.id)
+            << QString("kubectl delete job pull-%1 --ignore-not-found")
+                    .arg(app.id);
+
+        /* 2) execute in GUI thread through *existing* m_installer ----- */
+        bool ok = false;
+
         QMetaObject::invokeMethod(
-            qApp,                                     // target (GUI thread)
-            [this, cmds]() {
+            qApp,                                   // jump to GUI thread
+            [this, cmds, &ok]()
+            {
                 QEventLoop loop;
+
+                /* capture final result */
                 connect(m_installer, &K3s::Installer::finished,
-                        &loop, &QEventLoop::quit, Qt::QueuedConnection);
-                m_installer->queueAndRun(cmds);       // GUI thread safe
-                loop.exec();                          // waits for finished()
+                        &loop,
+                        [&](bool result){ ok = result; loop.quit(); },
+                        Qt::QueuedConnection);
+
+                m_installer->queueAndRun(cmds);
+                loop.exec();                        // wait for finished()
             },
-            Qt::BlockingQueuedConnection);            // <── THIS is the trick
+            Qt::BlockingQueuedConnection);          // block worker thread
+
+        /* 3) propagate result to Chain -------------------------------- */
+        if(ok) {
+            qDebug() << "[MarketplaceViewModel::confirmInstall] Commands executed successfully.";
+        } else {
+            qWarning() << "[MarketplaceViewModel::confirmInstall] Failed to execute commands.";
+            NOTIFY_WARNING("Installation", "Failed to execute commands for "
+                "pulling images. Please check the logs or try again later.");
+        }
+        return ok;                                 // false -> abort chain
     });
 
     /* ----------------------------------------------------------- *
      * step-2  : post update (worker thread)                       *
      * ----------------------------------------------------------- */
-    m_installChain->add([this, idx](){
-        confirmInstallPost(idx);
+    m_installChain->add([this, idx]()->bool{
+        return confirmInstallPost(idx);
     });
 
     /* -------------- final result ------------------------------- */
@@ -350,9 +370,12 @@ void MarketplaceViewModel::confirmInstall()
     m_installChain->start();
 }
 
-void MarketplaceViewModel::confirmInstallPre(int idx)
+bool MarketplaceViewModel::confirmInstallPre(int idx)
 {
-    // update tracking json
+    bool jobResult = true;
+    /* ----------------------------------------------------------- *
+     * step-0  : update tracking json                              *
+     * ----------------------------------------------------------- */
     DataManager dm;
     QJsonArray arr = dm.load(m_lastSearchTerm);
 
@@ -365,10 +388,35 @@ void MarketplaceViewModel::confirmInstallPre(int idx)
     if (!exists) {
         m_lastManifest = ManifestBuilder::write(app);
     }
+
+    /* ----------------------------------------------------------- *
+     * step-1  : verify worker node online (optional)              *
+     * ----------------------------------------------------------- */
+    qDebug() << "[MarketplaceViewModel::confirmInstall] Instaling on node:"
+             << m_lastManifest.deployNodeName
+             << "isRemoteNode:" << m_lastManifest.isRemoteNode;
+    if (m_lastManifest.isRemoteNode) {
+        const QString nodeName = m_lastManifest.deployNodeName;
+        if (nodeName.isEmpty()){
+            qDebug() << "[MarketplaceViewModel::confirmInstall] deployNodeName missing in manifest";
+        }
+
+        if (!K3s::Installer::nodeReady("vip", 5)){
+            qWarning() << "[MarketplaceViewModel::confirmInstall] worker node not Ready";
+            NOTIFY_WARNING("Installation", "The remote node is not ready. Please check the node status or try again later.");
+            jobResult = false;
+            throw std::runtime_error("[MarketplaceViewModel::confirmInstall] worker node not Ready");
+        }
+        else
+            qDebug() << "[MarketplaceViewModel::confirmInstall] worker node is Ready";
+    }
+    
+    return jobResult;
 }
 
-void MarketplaceViewModel::confirmInstallPost(int idx)
+bool MarketplaceViewModel::confirmInstallPost(int idx)
 {
+    bool jobResult = true;
     // update tracking json
     DataManager dm;
     QJsonArray arr = dm.load(m_lastSearchTerm);
@@ -393,6 +441,8 @@ void MarketplaceViewModel::confirmInstallPost(int idx)
         dm.save(m_lastSearchTerm, arr);
         qDebug() << "[MarketplaceViewModel::confirmInstallPost] save the updated array";
     }
+    
+    return jobResult;
 }
 
 void MarketplaceViewModel::cancelInstall() {

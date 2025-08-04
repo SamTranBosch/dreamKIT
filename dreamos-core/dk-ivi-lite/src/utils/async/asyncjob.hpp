@@ -4,6 +4,7 @@
 #include <QFutureWatcher>
 #include <QtConcurrent>
 #include <functional>
+#include <type_traits>
 
 namespace Async {
 
@@ -56,55 +57,87 @@ private:
 };
 
 /* ------------------------------------------------------------------ */
-/* 1b) Specialisation for void                                         */
+/* 1b) Specialisation for void                                        */
 /* ------------------------------------------------------------------ */
 template<>
 class Job<void> : public JobBase
 {
 public:
-    using Fn = std::function<void()>;
+    using Fn = std::function<bool()>;
 
+    /*  internal: ctor is fed by Chain with a wrapper that *always*
+     *  returns bool (true = success, false = failure)               */
     explicit Job(Fn fn, QObject *parent = nullptr)
         : JobBase(parent)
     {
-        m_future  = QtConcurrent::run(std::move(fn));
+        m_future  = QtConcurrent::run(std::move(fn));   // bool future
         m_watcher.setFuture(m_future);
 
-        connect(&m_watcher, &QFutureWatcher<void>::finished,
+        connect(&m_watcher, &QFutureWatcher<bool>::finished,
                 this,
                 [this]() {
-            bool ok = !m_future.isCanceled();   // simple success flag
+            const bool ok = m_future.result();
             emit finished(ok);
         });
     }
 
 private:
-    QFuture<void>        m_future;
-    QFutureWatcher<void> m_watcher;
+    QFuture<bool>        m_future;
+    QFutureWatcher<bool> m_watcher;
 };
 
 /* ------------------------------------------------------------------ */
-/* 2) Sequential chain (void jobs)                                     */
+/* 2) Sequential chain                                                */
 /* ------------------------------------------------------------------ */
 class Chain : public QObject
 {
     Q_OBJECT
 public:
-    using Fn = Job<void>::Fn;
+    /* --------------------------------------------------------------
+     *  add() accepts any lambda/functor that returns void OR bool
+     * ----------------------------------------------------------- */
+    template<typename F>
+    void add(F fn)
+    {
+        /* Wrapper converts the user's return value / exceptions
+         * into a plain bool for Job<void>.                         */
+        auto wrapper = [fn]() -> bool {
+            using Result = std::invoke_result_t<F>;
+            try {
+                if constexpr (std::is_same_v<Result, void>) {
+                    fn();                  // user code
+                    return true;
+                } else {                   // must be bool
+                    static_assert(std::is_same_v<Result, bool>,
+                                  "Chain::add(): functor must return void or bool");
+                    return fn();           // true / false
+                }
+            } catch (...) {
+                return false;              // any throw  -> failure
+            }
+        };
+
+        m_fns << std::move(wrapper);
+    }
 
     explicit Chain(QObject *p = nullptr) : QObject(p) {}
 
-    void add(Fn fn) { m_fns << std::move(fn); }
-
     void start()
     {
-        if (m_idx >= m_fns.size()) { emit finished(true); return; }
+        if (m_idx >= m_fns.size()) {
+            emit finished(true);
+            return;
+        }
         auto *job = new Job<void>(m_fns[m_idx], this);
         connect(job, &JobBase::finished,
                 this,
                 [this](bool ok){
-            if (!ok) { emit finished(false); return; }
-            ++m_idx; start();
+            if (!ok) {
+                emit finished(false);      // abort entire chain
+                return;
+            }
+            ++m_idx;
+            start();
         });
     }
 
@@ -112,8 +145,8 @@ signals:
     void finished(bool ok);
 
 private:
-    QList<Fn> m_fns;
-    int       m_idx {0};
+    QList<std::function<bool()>> m_fns;    // list of wrapped steps
+    int                           m_idx {0};
 };
 
 } // namespace Async

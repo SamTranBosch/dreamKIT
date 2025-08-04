@@ -79,6 +79,106 @@ void Installer::runNext()
     }
 }
 
+bool Installer::runCommandsSync(const QStringList &commands,
+                                QString *stdoutText,
+                                QString *stderrText)
+{
+    /*  we create a *temporary* event loop that blocks the caller
+     *  until the existing async machinery has processed every
+     *  command in the list.                                     */
+    QEventLoop loop;
+    bool okFlag = false;
+    QByteArray allOut, allErr;
+
+    /* collect output if requested */
+    auto accOut = [&](const QByteArray &d){ allOut += d; };
+    auto accErr = [&](const QByteArray &d){ allErr += d; };
+
+    /* connect before starting to not miss initial signals */
+    connect(this, &Installer::finished,
+            &loop, [&](bool ok){ okFlag = ok; loop.quit(); });
+
+    if (stdoutText)
+        connect(&m_proc, &QProcess::readyReadStandardOutput,
+                this, [&](){ allOut += m_proc.readAllStandardOutput(); });
+    if (stderrText)
+        connect(&m_proc, &QProcess::readyReadStandardError,
+                this, [&](){ allErr += m_proc.readAllStandardError(); });
+
+    queueAndRun(commands);           // << asynchronous start
+    loop.exec();                     // << wait here
+
+    if (stdoutText) *stdoutText = QString::fromUtf8(allOut);
+    if (stderrText) *stderrText = QString::fromUtf8(allErr);
+
+    return okFlag;                   // Chain will use this
+}
+
+/* static */
+bool Installer::nodeReady(const QString &nodeName,
+                          int timeoutSec,
+                          QString *stdoutText)
+{
+    QProcess proc;
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    QString p = env.value("PATH");
+    if (!p.contains("/usr/local/bin"))
+        p += ":/usr/local/bin";
+    env.insert("PATH", p);
+    proc.setProcessEnvironment(env);
+
+    /* ask for full JSON to avoid shell quoting hell                */
+    proc.setProgram("kubectl");
+    proc.setArguments({ "get", "node", nodeName, "-o", "json" });
+    proc.setProcessChannelMode(QProcess::MergedChannels);
+
+    proc.start();
+    if (!proc.waitForStarted(1000)) {
+        qWarning() << "[Installer::nodeReady] kubectl not start";
+        return false;
+    }
+    proc.waitForFinished(timeoutSec * 1000);
+
+    QByteArray raw = proc.readAll();          // may contain noise
+    if (stdoutText)
+        *stdoutText = QString::fromUtf8(raw);
+
+    /* strip everything before first “{” so that QJson parses cleanly */
+    int pos = raw.indexOf('{');
+    if (pos < 0) {
+        qWarning() << "[Installer::nodeReady] no JSON found";
+        return false;
+    }
+    QByteArray jsonPart = raw.mid(pos);
+
+    const QJsonDocument doc = QJsonDocument::fromJson(jsonPart);
+    if (doc.isNull() || !doc.isObject()) {
+        qWarning() << "[Installer::nodeReady] invalid JSON";
+        return false;
+    }
+
+    const QJsonArray conditions =
+            doc["status"].toObject()
+               ["conditions"].toArray();
+
+    for (const QJsonValue &v : conditions) {
+        const QJsonObject o = v.toObject();
+        if (o["type"] == QLatin1String("Ready"))
+            return o["status"] == QLatin1String("True");
+    }
+    qWarning() << "[Installer::nodeReady] Ready condition missing";
+    return false;
+}
+
+/* static */
+Async::Job<bool> *Installer::nodeReadyAsync(const QString &name,
+                                            int timeoutSec,
+                                            QObject *parent)
+{
+    return new Async::Job<bool>(
+        [=](){ return nodeReady(name, timeoutSec); }, parent);
+}
+
 /* static */
 bool Installer::deploymentAvailable(const QString &deploymentId,
                                     int timeoutSec,

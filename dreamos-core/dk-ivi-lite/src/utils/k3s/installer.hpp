@@ -24,6 +24,19 @@ public:
 
     void queueAndRun(const QStringList &commands);
     bool busy() const { return m_busy; }
+    /* -------------- synchronous helper ------------------ */
+    bool runCommandsSync(const QStringList &commands,
+                         QString *stdoutText = nullptr,
+                         QString *stderrText = nullptr);
+    
+    // Returns true if `kubectl get node <name>` reports the node Ready.
+    static bool nodeReady(const QString &nodeName,
+        int timeoutSec = 5,
+        QString *stdoutText = nullptr);
+
+    static Async::Job<bool>* nodeReadyAsync(const QString &nodeName,
+                        int timeoutSec = 5,
+                        QObject *parent = nullptr);
 
     // Convenience: return true if kubectl reports the deployment to be
     // available (≥1 ready replica) within <timeoutSec> seconds.

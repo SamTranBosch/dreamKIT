@@ -232,7 +232,7 @@ void VsersAsync::executeServices(int appIdx,
 
         worker->triggerCheckAppStart(
                 appId,
-                installedVappsList[appIdx].name.toLower());
+                installedVappsList[appIdx].id);
 
         installedVappsList[appIdx].isSubscribed = isSubscribed;
     });
@@ -355,7 +355,7 @@ void VsersAsync::checkRunningAppSts()
         const QString appName = app.name.toLower();
 
         auto *job = K3s::Installer::deploymentAvailableAsync(
-                        appName, 10, this);
+                        appId, 10, this);
 
         connect(job,
                 &Async::Job<K3s::DeploymentCheck>::finished,

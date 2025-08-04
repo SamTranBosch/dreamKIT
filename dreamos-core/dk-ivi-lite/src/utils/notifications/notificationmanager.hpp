@@ -114,6 +114,37 @@ public:
     Q_INVOKABLE void clearHistory();
     Q_INVOKABLE void markAllAsRead();
 
+    // Smart notification methods with deduplication
+    Q_INVOKABLE QString smartNotify(const QString &title, 
+            const QString &message,
+            int level = 0,
+            const QString &category = "general",
+            const QString &groupId = "");
+
+    Q_INVOKABLE void updateOrCreate(const QString &groupId,
+            const QString &title,
+            const QString &message,
+            int level = 0,
+            const QString &category = "general");
+
+    Q_INVOKABLE QString updateExisting(const QString &notificationId,
+            const QString &newMessage,
+            int newLevel = -1);
+            
+    Q_INVOKABLE void extendDuration(const QString &notificationId, int additionalMs = 3000);
+
+    // Batch operations for multiple rapid notifications
+    Q_INVOKABLE void startBatch(const QString &batchId);
+    Q_INVOKABLE void addToBatch(const QString &batchId, const QString &title, const QString &message, int level = 0);
+    Q_INVOKABLE void commitBatch(const QString &batchId, int maxNotifications = 3);
+
+    // Category-based smart notifications
+    Q_INVOKABLE QString categoryNotify(const QString &category,
+            const QString &title,
+            const QString &message,
+            int level = 0,
+            bool replaceExisting = true);
+
 signals:
     // Core notification signals
     void notificationAdded(QString id, QString title, QString message, 
@@ -133,6 +164,9 @@ signals:
     // Batch operations
     void allNotificationsDismissed();
     void categoryDismissed(QString category);
+
+    // Add this new signal to your existing signals:
+    void notificationExtended(QString id, int additionalMs);
 
 public slots:
     void handleNotificationAction(const QString &id, const QString &actionId);
@@ -170,6 +204,22 @@ private:
     
     // Task tracking
     QHash<QString, NotificationData> m_activeTasks;
+
+    // Enhanced data structures
+    QHash<QString, QString> m_groupToNotificationMap;  // groupId -> notificationId
+    QHash<QString, QList<NotificationData>> m_batchedNotifications;  // batchId -> notifications
+    QHash<QString, QDateTime> m_lastNotificationTime;  // category -> last time
+    QHash<QString, QString> m_categoryToNotificationMap;  // category -> latest notificationId
+    
+    // Smart notification settings
+    int m_minIntervalMs = 500;  // Minimum interval between same-category notifications
+    int m_maxSimilarNotifications = 3;  // Max similar notifications before batching
+    bool m_enableSmartBatching = true;
+    
+    // Add these new helper methods to your existing private methods:
+    bool shouldBatch(const QString &category) const;
+    bool isTooSoon(const QString &category) const;
+    QString findSimilarNotification(const QString &title, const QString &category) const;
 };
 
 // ───────────────────────────────────────────────────────────────
@@ -200,6 +250,23 @@ private:
     NotificationManager::instance().completeTask(id, result)
 
 #define FAIL_TASK(id, error) \
+    NotificationManager::instance().failTask(id, error)
+
+// Smart notifications that update instead of creating duplicates
+#define SMART_NOTIFY(category, title, msg, level) \
+    NotificationManager::instance().categoryNotify(category, title, msg, level, true)
+
+// Process tracking
+#define START_PROCESS(name, desc) \
+    NotificationManager::instance().startTask(name, desc)
+
+#define UPDATE_PROCESS(id, progress, status) \
+    NotificationManager::instance().updateTask(id, progress, status)
+
+#define COMPLETE_PROCESS(id, result) \
+    NotificationManager::instance().completeTask(id, result)
+
+#define FAIL_PROCESS(id, error) \
     NotificationManager::instance().failTask(id, error)
 
 #endif // NOTIFICATIONMANAGER_H

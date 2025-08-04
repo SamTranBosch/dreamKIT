@@ -15,6 +15,7 @@ struct ManifestInfo
     QString deploymentYaml;
     QString pullJobYaml;
     QString mirrorJobYaml;
+    QString deployNodeName = "xip"; // default for local apps
     bool    isRemoteNode = false;
 };
 
