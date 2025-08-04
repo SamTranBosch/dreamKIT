@@ -354,7 +354,7 @@ main() {
         show_info "Installing Git..."
         run_with_feedback "sudo apt-get update && sudo apt-get install -y git" "Git installed successfully" "Failed to install Git" true true
     fi
-    
+
     ###############################################################################
     # Step 7   local Docker registry
     ###############################################################################
@@ -371,7 +371,7 @@ main() {
     # Step 8   K3s-based installation
     ###############################################################################
     show_step 8 "K3s-based installation" "k3s master installation & preparation for local registry"
-    sudo ./scripts/k3s-master-prepare.sh eth0
+    sudo $CURRENT_DIR/scripts/k3s-master-prepare.sh eth0
     if [ $? -ne 0 ]; then
         show_error "Failed to prepare K3s master. Please check the logs."
         exit 1
