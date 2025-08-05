@@ -18,7 +18,6 @@ spec:
       containers:
       - name: dk-appinstallservice
         image: ${DOCKER_HUB_NAMESPACE}/dk_appinstallservice:latest
-        imagePullPolicy: Always
         env:
         - { name: USER, value: "${DK_USER}" }
         - { name: ARCH, value: "${ARCH}" }

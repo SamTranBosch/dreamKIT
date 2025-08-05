@@ -40,7 +40,6 @@ spec:
       containers:
       - name: dk-ivi
         image: ${DOCKER_HUB_NAMESPACE}/dk_ivi:latest
-        imagePullPolicy: Always
         env:
         - { name: DISPLAY, value: "${DISPLAY}" }
         - { name: XDG_RUNTIME_DIR, value: "${XDG_RUNTIME_DIR}" }

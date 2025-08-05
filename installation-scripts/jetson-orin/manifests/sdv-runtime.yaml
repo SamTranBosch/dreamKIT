@@ -19,7 +19,6 @@ spec:
       containers:
       - name: sdv-runtime
         image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest
-        imagePullPolicy: Always
         env:
         - name: USER
           value: "${DK_USER}"

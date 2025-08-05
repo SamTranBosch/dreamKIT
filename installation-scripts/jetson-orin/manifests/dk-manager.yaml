@@ -23,7 +23,6 @@ spec:
       containers:
       - name: dk-manager
         image: ${DOCKER_HUB_NAMESPACE}/dk_manager:latest
-        imagePullPolicy: Always
         env:
         - { name: USER, value: "${DK_USER}" }
         - { name: DOCKER_HUB_NAMESPACE, value: "${DOCKER_HUB_NAMESPACE}" }
