@@ -20,6 +20,7 @@ public:
 
     /* identity ---------------------------------------------------- */
     QString dbKey()      const override { return "vehicle-service"; }
+    QString fileName()   const override { return "vehicle-service"; }
     QString folderRoot() const override
     { return DK_CONTAINER_ROOT + "dk_marketplace/"; }
     QString deploymentYaml(const QString &id) const override

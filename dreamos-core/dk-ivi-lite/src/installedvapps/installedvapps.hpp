@@ -19,7 +19,8 @@ public:
     explicit VappsAsync(QObject *p=nullptr) : InstalledAsyncBase(p) {}
 
     /* identity ---------------------------------------------------- */
-    QString dbKey()      const override { return "vehicle"; }
+    QString dbKey()      const override { return "vehicle";     }
+    QString fileName()   const override { return "vehicle-app"; }
     QString folderRoot() const override
     { return DK_CONTAINER_ROOT + "dk_marketplace/"; }
     QString deploymentYaml(const QString &id) const override

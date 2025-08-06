@@ -26,6 +26,7 @@ public:
 
     /* must be provided by concrete subclass */
     virtual QString dbKey()      const = 0;
+    virtual QString fileName()   const = 0;
     virtual QString folderRoot() const = 0;
     virtual QString deploymentYaml(const QString &id) const = 0;
 
@@ -94,7 +95,8 @@ InstalledAsyncBase<TI,TD>::InstalledAsyncBase(QObject *parent)
     // 1) create the helper AFTER the base ctor knows the v-table
     QTimer::singleShot(0, this, [this](){
         const QString jf = folderRoot() + "installed"
-                        + QString(dbKey()).remove("vehicle-") + "s.json";
+                        + QString(fileName()).remove("vehicle-") + "s.json";
+        qDebug() << "[InstalledAsyncBase] Watching file:" << jf;
         m_checkThread = new InstalledCheckThread(static_cast<TD*>(this),
                                                 jf, this);
         connect(m_checkThread, &InstalledCheckThread::resultReady,
@@ -171,7 +173,9 @@ void InstalledAsyncBase<TI,TD>::fileChanged(const QString&)
 {
     auto *job = new Async::Job<QJsonArray>([=](){
         QThread::msleep(300);
-        DataManager dm; return dm.load(dbKey());
+        DataManager dm; 
+        qDebug() << "[InstalledAsyncBase] fileChanged, reloading from DB: " << dbKey();
+        return dm.load(dbKey());
     }, this);
 
     connect(job,&Async::JobBase::finished,this,[this,job](bool){
@@ -197,47 +201,65 @@ void InstalledAsyncBase<TI,TD>:: launchVsCode(int idx)
 /* ------------ (un)deploy -------------------------------------- */
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::executeServices(
-        int idx,const QString&,const QString id,bool sub)
+        int idx, const QString&, const QString id, bool subscribe)
 {
-    if(idx<0 || idx>=m_items.size()) return;
+    if (idx < 0 || idx >= m_items.size()) return;
 
-    const QStringList cmds = sub
-        ? QStringList{QString("kubectl apply -f %1").arg(deploymentYaml(id))}
-        : QStringList{QString("kubectl delete -f %1 --ignore-not-found").arg(deploymentYaml(id))};
+    const QStringList cmds = subscribe
+        ? QStringList{ QString("kubectl apply -f %1").arg(deploymentYaml(id)) }
+        : QStringList{ QString("kubectl delete -f %1 --ignore-not-found").arg(deploymentYaml(id)) };
 
     auto *chain = new Async::Chain(this);
 
-    /* node pre-check */
-    chain->add([sub](){
-        if(!sub) return true;
-        bool ok=false; try{ ok=K3s::Installer::nodeReady("vip",5);}catch(...){}
-        if(!ok) NOTIFY_WARNING("Node","vip not ready"); return true;
+    /* ------------------------------------------------------------------
+     *  Shared state that every lambda can read/write
+     * ----------------------------------------------------------------*/
+    auto kubectlOk = std::make_shared<bool>(false);
+
+    /* step-0  : optional node-ready check (unchanged) */
+    chain->add([subscribe](){
+        if (!subscribe) return true;
+        bool ready=false; try{ ready = K3s::Installer::nodeReady("vip",5);}catch(...){}
+        if (!ready)
+            NOTIFY_WARNING("Deployment warning",
+                           "Worker node not ready   deployment may fail.");
+        return true;
     });
 
-    /* kubectl */
-    chain->add([cmds](){
-        bool ok=false;
+    /* step-1  : run kubectl and remember the result in our shared bool  */
+    chain->add([cmds, kubectlOk](){
+        bool ok = false;
         QMetaObject::invokeMethod(qApp,[&](){
             K3s::Installer inst; QEventLoop l;
             QObject::connect(&inst,&K3s::Installer::finished,&l,
-                             [&](bool b){ok=b;l.quit();});
+                             [&](bool b){ ok = b; l.quit();});
             inst.queueAndRun(cmds); l.exec();
-        },Qt::BlockingQueuedConnection);
-        if(!ok) throw std::runtime_error("kubectl error");
+        }, Qt::BlockingQueuedConnection);
+
+        *kubectlOk = ok;                 // <-- store the result here
+        if(!ok) throw std::runtime_error("kubectl failed");
         return true;
     });
 
-    /* update model + start watcher */
-    chain->add([this,idx,id,sub](){
-        m_items[idx].isSubscribed=sub;
-        m_checkThread->triggerCheckAppStart(id,m_items[idx].name);
+    /* step-2  : update local model &     start docker-ps watcher       */
+    chain->add([this,idx,id,subscribe](){
+        m_items[idx].isSubscribed = subscribe;
+        m_checkThread->triggerCheckAppStart(id, m_items[idx].name);
         return true;
     });
 
-    connect(chain,&Async::Chain::finished,this,[id,sub](bool ok){
-        const QString a=sub?"deployed":"stopped";
-        if(ok) NOTIFY_SUCCESS("Service",QString("%1 %2").arg(id,a));
-        else   NOTIFY_ERROR  ("Service",QString("Failed to %1 %2").arg(a,id));
+    /* step-3  : inform the CheckThread about the kubectl result        */
+    chain->add([this, kubectlOk](){
+        m_checkThread->notifyState(*kubectlOk);
+        return true;
+    });
+
+    /* finished signal (unchanged) */
+    connect(chain,&Async::Chain::finished,this,
+            [id,subscribe](bool ok){
+        const QString act = subscribe ? "deployed" : "stopped";
+        if(ok) NOTIFY_SUCCESS("Service", QString("Service '%1' %2").arg(id,act));
+        else   NOTIFY_ERROR  ("Service", QString("Failed to %1 '%2'").arg(act,id));
     });
     chain->start();
 }
@@ -246,38 +268,79 @@ void InstalledAsyncBase<TI,TD>::executeServices(
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::removeServices(int idx)
 {
-    if(idx<0||idx>=m_items.size()) return;
+    if (idx < 0 || idx >= m_items.size()) return;
+
     const QString id   = m_items[idx].id;
     const QString yaml = deploymentYaml(id);
 
     auto *chain = new Async::Chain(this);
 
+    /* shared state between steps  -------------------------------- */
+    auto ok      = std::make_shared<bool>(true);
+    auto errText = std::make_shared<QString>();
+
+    /* step-0 : update database file ------------------------------ */
     chain->add([=](){
-        DataManager dm; QJsonArray in=dm.load(dbKey()),out;
-        for(auto v:in) if(v.toObject().value("id").toString()!=id) out.append(v);
-        dm.save(dbKey(),out); return true;
+        try {
+            DataManager dm;
+            QJsonArray in = dm.load(dbKey()), out;
+            for (auto v : in)
+                if (v.toObject().value("id").toString() != id)
+                    out.append(v);
+            dm.save(dbKey(), out);
+        } catch (const std::exception &e) {
+            *ok      = false;
+            *errText = QString("DB error: %1").arg(e.what());
+        }
+        return true;                     // never abort chain
     });
 
+    /* step-1 : run kubectl delete -------------------------------- */
     chain->add([=](){
-        bool ok=false;
-        QMetaObject::invokeMethod(qApp,[&](){
-            K3s::Installer inst; QEventLoop l;
-            const QStringList c{QString("kubectl delete -f %1 --ignore-not-found").arg(yaml)};
-            QObject::connect(&inst,&K3s::Installer::finished,&l,
-                             [&](bool b){ok=b;l.quit();});
-            inst.queueAndRun(c); l.exec();
-        },Qt::BlockingQueuedConnection);
-        if(!ok) throw std::runtime_error("kubectl delete failed");
+        try {
+            bool cmdOk = false;
+            QMetaObject::invokeMethod(qApp,[&](){
+                K3s::Installer inst;  QEventLoop loop;
+                const QStringList cmd{
+                    QString("kubectl delete -f %1 --ignore-not-found").arg(yaml) };
+                QObject::connect(&inst,&K3s::Installer::finished,&loop,
+                                 [&](bool b){ cmdOk = b; loop.quit();});
+                inst.queueAndRun(cmd);  loop.exec();
+            }, Qt::BlockingQueuedConnection);
+
+            if (!cmdOk) {
+                *ok      = false;
+                *errText = "kubectl delete failed";
+            }
+        } catch (const std::exception &e) {
+            *ok      = false;
+            *errText = QString("kubectl exception: %1").arg(e.what());
+        }
         return true;
     });
 
-    chain->add([this,idx](){ m_items.removeAt(idx); return true;});
-
-    connect(chain,&Async::Chain::finished,this,[=](bool ok){
-        if(ok){ NOTIFY_SUCCESS("Service",QString("%1 removed").arg(id));
-                initInstalledFromDB(); }
-        else  { NOTIFY_ERROR("Service",QString("Failed to remove %1").arg(id)); }
+    /* step-2 : update local list --------------------------------- */
+    chain->add([this,idx](){
+        if (idx < m_items.size())
+            m_items.removeAt(idx);
+        return true;
     });
+
+    /* step-3 : show result and refresh model --------------------- */
+    chain->add([this,id,ok,errText](){
+        if (*ok) {
+            NOTIFY_SUCCESS("Service", QString("%1 removed").arg(id));
+            initInstalledFromDB();                // reload UI model
+        } else {
+            NOTIFY_ERROR("Service",
+                         QString("Failed to remove %1. %2")
+                             .arg(id,*errText));
+        }
+        return true;
+    });
+
+    connect(chain,&Async::Chain::finished,
+            chain,&QObject::deleteLater);         // cleanup
     chain->start();
 }
 
@@ -285,7 +348,6 @@ void InstalledAsyncBase<TI,TD>::removeServices(int idx)
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::checkWorkerNodeStatus()
 {
-    qDebug() << "[Installer] checkWorkerNodeStatus";
     bool ok=false; try{ ok=K3s::Installer::nodeReady("vip",5);}catch(...){}
     auto st = ok?NodeStatus::Online:NodeStatus::Offline;
     if(st==m_nodeStatus) return;
@@ -320,5 +382,6 @@ void InstalledAsyncBase<TI,TD>::checkRunningAppSts()
         },Qt::QueuedConnection);
         return true;
     });
+
     chain->start();
 }
