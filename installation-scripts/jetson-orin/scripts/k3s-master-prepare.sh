@@ -57,7 +57,7 @@ echo -e "${BLUE} ${ARROW} Server IP ($SERVER_NET_IF): $SERVER_IP.${NC}"
 echo -e "${BLUE} ${ARROW} Node Token: $NODE_TOKEN.${NC}"
 
 # 3. Download K3s binaries for both amd64 and arm64
-sudo kubectl delete deployment manifests/k3s-rancher-mirrored-pause-mirror.yaml --ignore-not-found
+sudo kubectl delete -f manifests/k3s-rancher-mirrored-pause-mirror.yaml --ignore-not-found
 sudo kubectl apply -f manifests/k3s-rancher-mirrored-pause-mirror.yaml
 
 # === ADJUST THESE ===  
