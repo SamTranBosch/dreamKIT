@@ -19,7 +19,7 @@ qt_add_executable(dk_ivi
     digitalauto/digitalauto.cpp
     marketplace/marketplace.cpp
     installedservices/installedservices.cpp
-    installedservices/unsafeparamcheck.cpp
+    installedservices/installedcheckthread.cpp
     installedvapps/installedvapps.cpp
     utils/async/asyncjob.cpp
     utils/core/datamanager.cpp

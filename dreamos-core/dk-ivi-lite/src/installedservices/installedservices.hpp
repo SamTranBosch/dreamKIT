@@ -1,146 +1,59 @@
-#ifndef INSTALLEDSERVICES_H
-#define INSTALLEDSERVICES_H
+#pragma once
+#include "installedasyncbase.hpp"
 
-#include <QObject>
-#include <QTextStream>
-#include <QFile>
-#include <QString>
-#include <QThread>
-#include <QList>
-#include <QFileSystemWatcher>
-#include <QTimer>
-#include <QProcess>
-#include <QJsonArray>
-#include "../utils/async/asyncjob.hpp"
-
-// Forward declarations
-class VsersAsync;
-
-// ───────────────────────────────────────────────────────────────
-// Node Status Enum (added for node monitoring)
-// ───────────────────────────────────────────────────────────────
-enum class NodeStatus {
-    Unknown,
-    Online,
-    Offline
-};
-
-Q_DECLARE_METATYPE(NodeStatus)
-
-// ───────────────────────────────────────────────────────────────
-// Simple DTO used by the QML ListView
-// ───────────────────────────────────────────────────────────────
+/* DTO */
 struct VsersListStruct
 {
-    QString id;
-    QString category;
-    QString name;
-    QString author;
-    QString rating;
-    QString noofdownload;
-    QString iconPath;
-    QString foldername;
-    QString packagelink;
-    bool    isInstalled = false;
-    bool    isSubscribed = false;
+    QString id,category,name,author,rating,noofdownload,
+            iconPath,foldername,packagelink;
+    bool    isInstalled=false, isSubscribed=false;
 };
-
 Q_DECLARE_METATYPE(VsersListStruct)
 
-// ───────────────────────────────────────────────────────────────
-// Helper thread that watches docker-ps (unchanged behaviour)
-// ───────────────────────────────────────────────────────────────
-class InstalledVsersCheckThread : public QThread
+class VsersAsync : public InstalledAsyncBase<VsersListStruct,VsersAsync>
 {
     Q_OBJECT
+    Q_PROPERTY(bool workerNodeOnline READ workerNodeOnline
+               NOTIFY workerNodeStatusChanged)
 public:
-    explicit InstalledVsersCheckThread(VsersAsync *parent);
-    void notifyState(bool ok);
-    void triggerCheckAppStart(QString id, QString name);
-    void resetTriggerFlags();
+    explicit VsersAsync(QObject *p=nullptr) : InstalledAsyncBase(p) {}
 
-    static QString             m_appId;
-    static QString             m_appName;
-    static bool                m_istriggeredAppStart;
-signals:
-    void resultReady(QString appId, bool isStarted, QString msg);
+    /* identity ---------------------------------------------------- */
+    QString dbKey()      const override { return "vehicle-service"; }
+    QString folderRoot() const override
+    { return DK_CONTAINER_ROOT + "dk_marketplace/"; }
+    QString deploymentYaml(const QString &id) const override
+    { return QString("%1/%2/%2_deployment.yaml").arg(folderRoot(),id); }
 
-private:
-    VsersAsync         *m_serviceAsync {nullptr};
-    QFileSystemWatcher *m_filewatcher  {nullptr};
-};
+    /* ---------- QML-visible wrappers ---------------------------- */
+    Q_INVOKABLE void initInstalledFromDB()             { InstalledAsyncBase::initInstalledFromDB(); }
+    Q_INVOKABLE void executeServices(int i,const QString &n,const QString &id,bool sub)
+                                                    { InstalledAsyncBase::executeServices(i,n,id,sub); }
+    Q_INVOKABLE void removeServices(int i)           { InstalledAsyncBase::removeServices(i); }
+    Q_INVOKABLE void openAppEditor(int idx) { launchVsCode(idx); }
 
-// ───────────────────────────────────────────────────────────────
-// The object exposed to QML
-// ───────────────────────────────────────────────────────────────
-class VsersAsync : public QObject
-{
-    Q_OBJECT
-    Q_PROPERTY(bool workerNodeOnline READ workerNodeOnline NOTIFY workerNodeStatusChanged)
-
-public:
-    explicit VsersAsync();
-
-    // Existing Q_INVOKABLE methods
-    Q_INVOKABLE void initInstalledFromDB();
-    Q_INVOKABLE void updateInstalledList(const QJsonArray &arr);
-    Q_INVOKABLE void executeServices(
-        int appIdx, const QString name,
-        const QString appId, bool isSubscribed);
-    Q_INVOKABLE void removeServices(int index);
-    Q_INVOKABLE void openAppEditor(int idx);
-
-    // Property getter for worker node status
-    bool workerNodeOnline() const { return m_lastNodeStatus == NodeStatus::Online; }
+    /* slot needed by InstalledCheckThread string-connect */
+    Q_SLOT void fileChanged(const QString &p)         { InstalledAsyncBase::fileChanged(p); }
 
 signals:
-    // Existing signals
-    void appendServicesInfoToServicesList(QString name, QString author,
-                                          QString rating, QString noofdownload,
-                                          QString icon, bool isInstalled,
-                                          QString appId, bool isSubscribed);
-    void appendLastRowToServicesList(int noOfServices);
+    void workerNodeStatusChanged(bool);
     void clearServicesListView();
-    void updateStartAppMsg(QString appId, bool isStarted, QString msg);
-    void updateServicesRunningSts(QString appId, bool isStarted, int idx);
-    
-    // New signal for node status changes
-    void workerNodeStatusChanged(bool isOnline);
+    void appendServicesInfoToServicesList(QString,QString,QString,QString,
+                                          QString,bool,QString,bool);
+    void appendLastRowToServicesList(int);
+    void updateServicesRunningSts(QString,bool,int);
+    void updateStartAppMsg(QString,bool,QString);
 
 public slots:
-    // Existing slots
-    void handleResults(QString appId, bool isStarted, QString msg);
-    void fileChanged(const QString &path);
-    void checkRunningAppSts();
-    void onInstallerFinished(int exitCode, QProcess::ExitStatus status);
-    
-    // New slot for node monitoring
-    void checkWorkerNodeStatus();
+    void handleResults(QString id,bool ok,QString msg)
+    { emit updateStartAppMsg(id,ok,msg); }
 
-private:
-    // Helper methods
-    void handleNodeStatusChange(NodeStatus newStatus);
-    
-    // Status check result structure
-    struct AppStatusResult {
-        QString appId;
-        QString appName;
-        bool isAvailable;
-        int index;
-    };
-    
-    // Existing members
-    QList<VsersListStruct>      installedVappsList;
-    InstalledVsersCheckThread  *m_workerThread      {nullptr};
-    QTimer                     *m_timer_apprunningcheck {nullptr};
-    QProcess                   *m_installer         {nullptr};
-    
-    // New members for node monitoring
-    QTimer                     *m_timer_nodecheck   {nullptr};
-    NodeStatus                  m_lastNodeStatus    {NodeStatus::Unknown};
-    
-    // Status checking results (temporary storage)
-    QList<AppStatusResult>      m_lastStatusResults;
+protected:
+    /* specific for VsersAsync, to monitor status of worker node */
+    bool wantsNodeMonitor() const override { return true; }
+
+    void appendItemToQml(const VsersListStruct &it) override
+    { emit appendServicesInfoToServicesList(it.name,it.author,it.rating,
+                                            it.noofdownload,it.iconPath,
+                                            it.isInstalled,it.id,it.isSubscribed); }
 };
-
-#endif // INSTALLEDSERVICES_H
