@@ -194,6 +194,74 @@ apply_manifest() {
       "Failed to apply ${yaml}"
 }
 
+# ---------------------------------------------------------------------------
+# Helper   update package index
+# ---------------------------------------------------------------------------
+update_package_index() {
+    show_info "Updating package index …"
+    run_with_feedback \
+        "sudo apt-get update -y" \
+        "Package index updated" \
+        "Failed to update package index" \
+        true true
+}
+
+# ---------------------------------------------------------------------------
+# Helper   install a single deb package if the related command is absent
+#   $1   binary/command to look for
+#   $2   deb package to install (defaults to same as $1)
+# ---------------------------------------------------------------------------
+install_if_missing() {
+    local cmd_name="$1"
+    local deb_name="${2:-$1}"
+
+    if command -v "$cmd_name" >/dev/null 2>&1; then
+        show_info "$cmd_name is already installed"
+    else
+        show_info "Installing $deb_name …"
+        run_with_feedback \
+            "sudo apt-get install -y $deb_name" \
+            "$deb_name installed successfully" \
+            "Failed to install $deb_name" \
+            true true
+    fi
+}
+# ---------------------------------------------------------------------------
+# Helper   install k9s when missing
+# ---------------------------------------------------------------------------
+install_k9s() {
+    # ---- Version to pull (override via env K9S_VERSION) --------------------
+    local VERSION="${K9S_VERSION:-0.32.4}"
+
+    # ---- Detect architecture ----------------------------------------------
+    local ARCH
+    case "$(uname -m)" in
+        x86_64|amd64)   ARCH="x86_64" ;;
+        armv7l|armv7)   ARCH="armv7"  ;;
+        aarch64|arm64)  ARCH="arm64"  ;;
+        *)
+            show_error "Unsupported architecture: $(uname -m)"
+            return 1
+            ;;
+    esac
+
+    # ---- Compose download URL ---------------------------------------------
+    local OS="linux"
+    local TARBALL="k9s_${VERSION}_${OS}_${ARCH}.tar.gz"
+    local URL="https://github.com/derailed/k9s/releases/download/v${VERSION}/${TARBALL}"
+
+    # ---- Download & install ------------------------------------------------
+    show_info "Downloading k9s v${VERSION} (${ARCH})"
+    run_with_feedback \
+        "tmp_dir=\$(mktemp -d) && \
+         curl -fsSL \"${URL}\" -o \"\$tmp_dir/${TARBALL}\" && \
+         sudo tar -C /usr/local/bin -xzf \"\$tmp_dir/${TARBALL}\" k9s && \
+         rm -rf \"\$tmp_dir\"" \
+        "k9s installed successfully" \
+        "Failed to install k9s" \
+        true true
+}
+
 run_with_feedback() {
     local command=$1
     local success_msg=$2
@@ -348,12 +416,49 @@ main() {
     # Step 6: Dependencies Installation
     show_step 6 "Dependencies" "Installing required system utilities"
     
-    if command -v git >/dev/null 2>&1; then
-        show_info "Git is already installed"
+    # 0) Update repositories first (only once)
+    update_package_index
+    # 1) Git
+    install_if_missing git
+
+    # 2) Docker (package: docker.io)
+    install_if_missing docker docker.io
+
+    # Ensure Docker service is enabled & running
+    if systemctl is-active --quiet docker; then
+        show_info "Docker service already running"
     else
-        show_info "Installing Git..."
-        run_with_feedback "sudo apt-get update && sudo apt-get install -y git" "Git installed successfully" "Failed to install Git" true true
+        run_with_feedback \
+            "sudo systemctl enable --now docker" \
+            "Docker service enabled and started" \
+            "Failed to start Docker service" \
+            true true
     fi
+
+    # Add current user to docker group (so `docker` can be run without sudo)
+    if groups "$USER" | grep -q '\bdocker\b'; then
+        show_info "User $USER is already in the docker group"
+    else
+        run_with_feedback \
+            "sudo usermod -aG docker $USER" \
+            "Added $USER to docker group (log out / in for it to take effect)" \
+            "Failed to add $USER to docker group" \
+            false true
+    fi
+
+    # 3) sshpass
+    install_if_missing sshpass
+    # 4) npm (nodejs is pulled in automatically)
+    install_if_missing npm
+    # 5) k9s
+    if command -v k9s >/dev/null 2>&1; then
+        show_info "k9s is already installed"
+    else
+        install_k9s
+    fi
+    
+    # Done
+    show_info "System utilities are ready"
 
     ###############################################################################
     # Step 7   local Docker registry
