@@ -1,6 +1,7 @@
 #include "installedservices.hpp"
 #include "../utils/core/datamanager.hpp"
 #include "../utils/k3s/installer.hpp"
+#include "../utils/notifications/notificationmanager.hpp"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -9,6 +10,9 @@
 #include <QDebug>
 #include <QMutex>
 #include <QProcessEnvironment>
+#include <QRegularExpression>
+
+using namespace Async;
 
 
 // ───────────────────────────────────────────────────────────────
@@ -75,6 +79,7 @@ void InstalledVsersCheckThread::notifyState(bool ok)
 // VsersAsync ctor
 // ───────────────────────────────────────────────────────────────
 VsersAsync::VsersAsync()
+    : m_lastNodeStatus(NodeStatus::Unknown)
 {
     if (DK_CONTAINER_ROOT.isEmpty())
         DK_CONTAINER_ROOT = qEnvironmentVariable("DK_CONTAINER_ROOT");
@@ -106,6 +111,12 @@ VsersAsync::VsersAsync()
     connect(m_timer_apprunningcheck, &QTimer::timeout,
             this, &VsersAsync::checkRunningAppSts);
     m_timer_apprunningcheck->start(5000);
+
+    // Node status monitoring timer
+    m_timer_nodecheck = new QTimer(this);
+    connect(m_timer_nodecheck, &QTimer::timeout,
+            this, &VsersAsync::checkWorkerNodeStatus);
+    m_timer_nodecheck->start(10000); // Check every 10 seconds
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -117,6 +128,60 @@ void VsersAsync::onInstallerFinished(int exitCode,
     qDebug() << "[Installer] finished code=" << exitCode
              << "status=" << status
              << "\noutput:\n" << m_installer->readAll();
+}
+
+// ───────────────────────────────────────────────────────────────
+// Worker Node Status Monitoring
+// ───────────────────────────────────────────────────────────────
+void VsersAsync::checkWorkerNodeStatus()
+{
+    // Use simple QTimer approach to avoid Async framework dependency issues
+    QTimer::singleShot(0, this, [this](){
+        // Check node status in a lambda that can be called asynchronously
+        bool nodeReady = false;
+        try {
+            nodeReady = K3s::Installer::nodeReady("vip", 5);
+        } catch (...) {
+            qWarning() << "[VsersAsync] Exception occurred while checking node status";
+            nodeReady = false;
+        }
+        
+        const NodeStatus newStatus = nodeReady ? NodeStatus::Online : NodeStatus::Offline;
+        handleNodeStatusChange(newStatus);
+    });
+}
+
+void VsersAsync::handleNodeStatusChange(NodeStatus newStatus)
+{
+    // Only notify on status change to avoid spam
+    if (m_lastNodeStatus == newStatus) {
+        return;
+    }
+
+    const QString nodeName = "vip"; // Worker node name
+    m_lastNodeStatus = newStatus;
+
+    switch (newStatus) {
+        case NodeStatus::Online:
+            qDebug() << "[VsersAsync] Worker node" << nodeName << "is now ONLINE";
+            NOTIFY_SUCCESS("Worker Node Status", 
+                          QString("Worker node '%1' is now online and ready").arg(nodeName));
+            break;
+            
+        case NodeStatus::Offline:
+            qWarning() << "[VsersAsync] Worker node" << nodeName << "is OFFLINE";
+            NOTIFY_WARNING("Worker Node Status",
+                          QString("Worker node '%1' is offline. Some services may not function properly").arg(nodeName));
+            break;
+            
+        case NodeStatus::Unknown:
+        default:
+            qDebug() << "[VsersAsync] Worker node" << nodeName << "status is UNKNOWN";
+            break;
+    }
+
+    // Emit signal for UI updates if needed
+    emit workerNodeStatusChanged(newStatus == NodeStatus::Online);
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -177,8 +242,9 @@ void VsersAsync::updateInstalledList(const QJsonArray &arr)
             app.iconPath, app.isInstalled,
             app.id, app.isSubscribed);
 }
+
 // ─────────────────────────────────────────────────────────────
-// Apply / Delete deployment
+// Apply / Delete deployment with Chain pattern and node status check
 // ─────────────────────────────────────────────────────────────
 void VsersAsync::executeServices(int appIdx,
                                  const QString /*name*/,
@@ -195,105 +261,249 @@ void VsersAsync::executeServices(int appIdx,
         : QStringList{ QString("kubectl delete -f %1 --ignore-not-found")
                           .arg(deployYaml) };
 
-    auto *chain = new Async::Chain(this);
+    auto *chain = new Chain(this);
 
-    /* step-0 : kubectl (runs in GUI thread, waits synchronously) */
-    chain->add([cmds = std::move(cmds)](){
+    /* ----------------------------------------------------------- *
+     * Step 0: Pre-deployment node status check (worker thread)    *
+     * ----------------------------------------------------------- */
+    chain->add([this, appId, isSubscribed]() -> bool {
+        // Only check node status for deployment (subscribe), not for deletion
+        if (isSubscribed) {
+            try {
+                if (!K3s::Installer::nodeReady("vip", 5)) {
+                    qWarning() << "[VsersAsync::executeServices] Worker node not ready for deployment";
+                    
+                    // Use invokeMethod to show notification in GUI thread
+                    QMetaObject::invokeMethod(
+                        qApp,
+                        [](){
+                            NOTIFY_WARNING("Deployment Warning", 
+                                          "Worker node is not ready. Relevant deployment may fail");
+                        },
+                        Qt::QueuedConnection);
+                    
+                    // Don't fail the chain, just warn user
+                } else {
+                    qDebug() << "[VsersAsync::executeServices] Worker node is ready for deployment";
+                }
+            } catch (...) {
+                qWarning() << "[VsersAsync::executeServices] Exception while checking node status";
+            }
+        }
+        return true;
+    });
 
+    /* ----------------------------------------------------------- *
+     * Step 1: Execute kubectl commands (GUI thread)               *
+     * ----------------------------------------------------------- */
+    chain->add([this, cmds = std::move(cmds)]() -> bool {
         bool okKubectl = false;
-    
+        
         QMetaObject::invokeMethod(
-            qApp,                                        // run in GUI thread
-            [&cmds, &okKubectl](){
-    
-                K3s::Installer installer;                // local, GUI thread
+            qApp,                                   // run in GUI thread
+            [this, cmds, &okKubectl](){
+                
+                K3s::Installer installer;           // local, GUI thread
                 QEventLoop loop;
-    
+                
                 QObject::connect(&installer, &K3s::Installer::finished,
                                  &loop,
                                  [&](bool ok){ okKubectl = ok; loop.quit(); },
                                  Qt::QueuedConnection);
-    
+                
                 installer.queueAndRun(cmds);
-                loop.exec();                             // wait for pipeline
+                loop.exec();                        // wait for pipeline
             },
-            Qt::BlockingQueuedConnection);
-    
-        if (!okKubectl)
+            Qt::BlockingQueuedConnection);          // block worker thread
+        
+        if (!okKubectl) {
+            qWarning() << "[VsersAsync::executeServices] kubectl command failed";
             throw std::runtime_error("kubectl apply/delete failed");
-    });    
+        }
+        
+        qDebug() << "[VsersAsync::executeServices] kubectl commands executed successfully";
+        return true;
+    });
 
-    /* step-1 : docker-ps watcher (worker thread) */
-    chain->add([this, appId, appIdx, isSubscribed](){
-        InstalledVsersCheckThread *worker = new InstalledVsersCheckThread(this);
-        connect(worker, &InstalledVsersCheckThread::resultReady,
-                this,   &VsersAsync::handleResults,
+    /* ----------------------------------------------------------- *
+     * Step 2: Update status and trigger monitoring (worker thread)*
+     * ----------------------------------------------------------- */
+    chain->add([this, appId, appIdx, isSubscribed]() -> bool {
+        // Update subscription status
+        if (appIdx < installedVappsList.size()) {
+            installedVappsList[appIdx].isSubscribed = isSubscribed;
+            
+            // Trigger check for app start
+            m_workerThread->triggerCheckAppStart(appId, installedVappsList[appIdx].name);
+            
+            qDebug() << "[VsersAsync::executeServices] Updated app status for" << appId 
+                     << "isSubscribed:" << isSubscribed;
+        }
+        return true;
+    });
+
+    /* ----------------------------------------------------------- *
+     * Chain completion handling                                    *
+     * ----------------------------------------------------------- */
+    connect(chain, &Chain::finished,
+            this, [this, appId, isSubscribed](bool success){
+        if (success) {
+            qDebug() << "[VsersAsync::executeServices] Chain completed successfully for" << appId;
+            
+            // Show success notification
+            const QString action = isSubscribed ? "deployed" : "stopped";
+            QMetaObject::invokeMethod(
+                qApp,
+                [appId, action](){
+                    NOTIFY_SUCCESS("Service Operation", 
+                                  QString("Service '%1' %2 successfully").arg(appId, action));
+                },
                 Qt::QueuedConnection);
-
-        worker->triggerCheckAppStart(
-                appId,
-                installedVappsList[appIdx].id);
-
-        installedVappsList[appIdx].isSubscribed = isSubscribed;
+        } else {
+            qWarning() << "[VsersAsync::executeServices] Chain failed for" << appId;
+            
+            // Show error notification
+            QMetaObject::invokeMethod(
+                qApp,
+                [appId, isSubscribed](){
+                    const QString action = isSubscribed ? "deploy" : "stop";
+                    NOTIFY_ERROR("Service Operation Failed", 
+                                QString("Failed to %1 service '%2'").arg(action, appId));
+                },
+                Qt::QueuedConnection);
+        }
     });
 
     chain->start();
 }
 
 // ─────────────────────────────────────────────────────────────
-// Remove services
+// Remove services with Chain pattern
 // ─────────────────────────────────────────────────────────────
 void VsersAsync::removeServices(int index)
 {
     if (index < 0 || index >= installedVappsList.size()) return;
 
     const QString appId = installedVappsList[index].id;
+    const QString appName = installedVappsList[index].name;
     const QString deployYaml = QString("%1/%2/%2_deployment.yaml")
                                .arg(DK_INSTALLED_SERS_FOLDER, appId);
 
-    auto *chain = new Async::Chain(this);
+    auto *chain = new Chain(this);
 
-    /* step-0 : update installedservices.json (worker thread) */
-    chain->add([appId](){
-        DataManager dm;
-        QJsonArray arr = dm.load("vehicle-service");
-        QJsonArray out;
-        for (const auto &v : arr)
-            if (v.isObject() && v.toObject().value("id").toString() != appId)
-                out.append(v);
-        dm.save("vehicle-service", out);
+    /* ----------------------------------------------------------- *
+     * Step 0: Update installedservices.json (worker thread)       *
+     * ----------------------------------------------------------- */
+    chain->add([appId]() -> bool {
+        try {
+            DataManager dm;
+            QJsonArray arr = dm.load("vehicle-service");
+            QJsonArray out;
+            
+            bool found = false;
+            for (const auto &v : arr) {
+                if (v.isObject() && v.toObject().value("id").toString() != appId) {
+                    out.append(v);
+                } else {
+                    found = true;
+                }
+            }
+            
+            if (found) {
+                dm.save("vehicle-service", out);
+                qDebug() << "[VsersAsync::removeServices] Removed" << appId << "from database";
+            } else {
+                qWarning() << "[VsersAsync::removeServices] App" << appId << "not found in database";
+            }
+            
+            return true;
+        } catch (const std::exception &e) {
+            qWarning() << "[VsersAsync::removeServices] Database update failed:" << e.what();
+            throw std::runtime_error("Failed to update database");
+        }
     });
 
-    /* step-1 : kubectl delete in GUI thread */
-    chain->add([deployYaml](){
-
+    /* ----------------------------------------------------------- *
+     * Step 1: kubectl delete deployment (GUI thread)              *
+     * ----------------------------------------------------------- */
+    chain->add([this, deployYaml, appId]() -> bool {
         bool okKubectl = false;
-    
+        
         QMetaObject::invokeMethod(
             qApp,
-            [&deployYaml, &okKubectl](){
-    
+            [this, deployYaml, appId, &okKubectl](){
+                
                 const QStringList cmds{
-                    QString("kubectl delete -f %1 --ignore-not-found")
-                            .arg(deployYaml)
+                    QString("kubectl delete -f %1 --ignore-not-found").arg(deployYaml)
                 };
-    
+                
                 K3s::Installer installer;
                 QEventLoop loop;
-    
+                
                 QObject::connect(&installer, &K3s::Installer::finished,
                                  &loop,
                                  [&](bool ok){ okKubectl = ok; loop.quit(); },
                                  Qt::QueuedConnection);
-    
+                
                 installer.queueAndRun(cmds);
                 loop.exec();
             },
             Qt::BlockingQueuedConnection);
-    
-        if (!okKubectl)
+        
+        if (!okKubectl) {
+            qWarning() << "[VsersAsync::removeServices] kubectl delete failed for" << appId;
             throw std::runtime_error("kubectl delete failed");
-    });    
+        }
+        
+        qDebug() << "[VsersAsync::removeServices] kubectl delete completed for" << appId;
+        return true;
+    });
+
+    /* ----------------------------------------------------------- *
+     * Step 2: Clean up local data structures (worker thread)      *
+     * ----------------------------------------------------------- */
+    chain->add([this, index, appId]() -> bool {
+        // Remove from local list if still valid index
+        if (index >= 0 && index < installedVappsList.size() && 
+            installedVappsList[index].id == appId) {
+            installedVappsList.removeAt(index);
+            qDebug() << "[VsersAsync::removeServices] Removed" << appId << "from local list";
+        }
+        return true;
+    });
+
+    /* ----------------------------------------------------------- *
+     * Chain completion handling                                    *
+     * ----------------------------------------------------------- */
+    connect(chain, &Chain::finished,
+            this, [this, appId, appName](bool success){
+        if (success) {
+            qDebug() << "[VsersAsync::removeServices] Successfully removed" << appId;
+            
+            // Show success notification and refresh UI
+            QMetaObject::invokeMethod(
+                qApp,
+                [this, appName](){
+                    NOTIFY_SUCCESS("Service Removed", 
+                                  QString("Service '%1' removed successfully").arg(appName));
+                    
+                    // Refresh the UI list
+                    initInstalledFromDB();
+                },
+                Qt::QueuedConnection);
+        } else {
+            qWarning() << "[VsersAsync::removeServices] Failed to remove" << appId;
+            
+            // Show error notification
+            QMetaObject::invokeMethod(
+                qApp,
+                [appName](){
+                    NOTIFY_ERROR("Service Removal Failed", 
+                                QString("Failed to remove service '%1'").arg(appName));
+                },
+                Qt::QueuedConnection);
+        }
+    });
 
     chain->start();
 }
@@ -315,63 +525,154 @@ void VsersAsync::handleResults(QString appId, bool isStarted, QString msg)
 }
 
 // ─────────────────────────────────────────────────────────────
-// File changed (installedservices.json)   reload list
+// File changed (installedservices.json) reload list
 // ─────────────────────────────────────────────────────────────
 void VsersAsync::fileChanged(const QString &path)
 {
-    /* debounce in worker thread, no sleep on GUI */
-    auto *job = new Async::Job<QJsonArray>([=](){
-
-        QThread::msleep(500);          // debounce 0.5 s
+    // Simple debounce approach without Async framework
+    QTimer::singleShot(500, this, [this](){
         DataManager dm;
-        return dm.load("vehicle-service");   // worker thread!
-
-    }, this);
-
-    connect(job, &Async::JobBase::finished,
-            this, [this, job](bool ok){
-        if (!ok) { job->deleteLater(); return; }
-
-        const QJsonArray arr = job->result();
-        /* a helper you already have   refresh model from JSON */
+        QJsonArray arr = dm.load("vehicle-service");
         updateInstalledList(arr);
-        job->deleteLater();
     });
 }
 
 // ───────────────────────────────────────────────────────────────
-// Periodic check: is the deployment up?
+// Periodic check: is the deployment up? (Enhanced with Chain pattern)
 // ───────────────────────────────────────────────────────────────
 void VsersAsync::checkRunningAppSts()
 {
-    for (int i = 0; i < installedVappsList.size(); ++i) {
-        const auto &app = installedVappsList[i];
-        if (app.id.isEmpty()) {
-            emit updateServicesRunningSts(app.id, false, i);
-            continue;
-        }
-
-        const QString appId   = app.id;
-        const QString appName = app.name.toLower();
-
-        auto *job = K3s::Installer::deploymentAvailableAsync(
-                        appId, 10, this);
-
-        connect(job,
-                &Async::Job<K3s::DeploymentCheck>::finished,
-                this,
-                /* capture id + index + job */
-                [this, i, job, appId](bool){
-            const auto res = job->result();
-            emit updateServicesRunningSts(appId, res.available, i);
-            job->deleteLater();
-
-            InstalledVsersCheckThread *worker = new InstalledVsersCheckThread(this);
-            if (res.available) {
-                connect(worker, &InstalledVsersCheckThread::resultReady,
-                    this, &VsersAsync::handleResults);
-                    worker->notifyState(res.available);
-            }
-        });
+    if (installedVappsList.isEmpty()) {
+        return; // No apps to check
     }
+
+    // Create a single chain to check all apps sequentially
+    auto *chain = new Chain(this);
+
+    /* ----------------------------------------------------------- *
+     * Step 0: Check deployment status for all apps (worker thread)*
+     * ----------------------------------------------------------- */
+    chain->add([this]() -> bool {
+        QList<AppStatusResult> results;
+        
+        // Check each app's deployment status
+        for (int i = 0; i < installedVappsList.size(); ++i) {
+            const auto &app = installedVappsList[i];
+            AppStatusResult result;
+            result.appId = app.id;
+            result.appName = app.name;
+            result.index = i;
+            result.isAvailable = false;
+            
+            if (app.id.isEmpty()) {
+                results.append(result);
+                continue;
+            }
+            
+            try {
+                // Use kubectl to check deployment status
+                QProcess checkProcess;
+                checkProcess.start("kubectl", QStringList() 
+                                  << "get" << "deployment" << app.id
+                                  << "--no-headers" << "-o" 
+                                  << "custom-columns=READY:.status.readyReplicas,DESIRED:.spec.replicas");
+                checkProcess.waitForFinished(5000); // 5 second timeout
+                
+                if (checkProcess.exitCode() == 0) {
+                    QString output = checkProcess.readAllStandardOutput().trimmed();
+                    if (!output.isEmpty() && output != "<none>") {
+                        // Use QRegularExpression instead of QRegExp for Qt6
+                        QRegularExpression regex("\\s+");
+                        QStringList parts = output.split(regex);
+                        if (parts.size() >= 2) {
+                            int ready = parts[0].toInt();
+                            int desired = parts[1].toInt();
+                            result.isAvailable = (ready > 0 && ready == desired);
+                        }
+                    }
+                } else {
+                    // Deployment doesn't exist or error occurred
+                    result.isAvailable = false;
+                }
+            } catch (...) {
+                qWarning() << "[VsersAsync::checkRunningAppSts] Exception while checking" << app.id;
+                result.isAvailable = false;
+            }
+            
+            results.append(result);
+        }
+        
+        // Store results for next step
+        m_lastStatusResults = results;
+        return true;
+    });
+
+    /* ----------------------------------------------------------- *
+     * Step 1: Update UI and notify about status changes (GUI thread)*
+     * ----------------------------------------------------------- */
+    chain->add([this]() -> bool {
+        QMetaObject::invokeMethod(
+            qApp,
+            [this](){
+                for (const auto &result : m_lastStatusResults) {
+                    // Emit status update signal
+                    emit updateServicesRunningSts(result.appId, result.isAvailable, result.index);
+                    
+                    // If app is available, trigger success notification
+                    if (result.isAvailable) {
+                        // m_workerThread->triggerCheckAppStart(result.appId, result.appName);
+                        m_workerThread->notifyState(true);
+                    }
+                }
+                
+                // Clear results after processing
+                m_lastStatusResults.clear();
+            },
+            Qt::QueuedConnection);
+        
+        return true;
+    });
+
+    /* ----------------------------------------------------------- *
+     * Step 2: Log summary and schedule next check (worker thread) *
+     * ----------------------------------------------------------- */
+    chain->add([this]() -> bool {
+        int runningCount = 0;
+        int totalCount = installedVappsList.size();
+        
+        // Count running services from last results
+        for (const auto &result : m_lastStatusResults) {
+            if (result.isAvailable) {
+                runningCount++;
+            }
+        }
+        
+        // qDebug() << "[VsersAsync::checkRunningAppSts] Status check completed:"
+        //          << runningCount << "of" << totalCount << "services running";
+        
+        return true;
+    });
+
+    /* ----------------------------------------------------------- *
+     * Chain completion handling                                    *
+     * ----------------------------------------------------------- */
+    connect(chain, &Chain::finished,
+            this, [this](bool success){
+        if (success) {
+            // qDebug() << "[VsersAsync::checkRunningAppSts] Status check chain completed successfully";
+        } else {
+            qWarning() << "[VsersAsync::checkRunningAppSts] Status check chain failed";
+            
+            // Show error notification for failed status check
+            QMetaObject::invokeMethod(
+                qApp,
+                [](){
+                    NOTIFY_WARNING("Status Check", 
+                                  "Failed to check service status. Will retry in next cycle.");
+                },
+                Qt::QueuedConnection);
+        }
+    });
+
+    chain->start();
 }

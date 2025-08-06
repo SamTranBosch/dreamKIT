@@ -379,18 +379,33 @@ main() {
     show_success "K3s master prepared successfully"
     
     ###############################################################################
-    # Step 9   NXP-S32G setup (optional)
+    # Step-9   NXP-S32G setup (k3s-agent & friends)
     ###############################################################################
     show_step 9 "NXP-S32G setup" "k3s-agent installation & relavant stuff"
-    nxp_s32g_setup="false"
-    echo -e "\n${YELLOW}Ensure the connection to ECU at ip_address: 192.168.56.49 is good ? [y/N]: ${NC}"
+
+    TARGET_IP="192.168.56.49"
+    PING_COUNT=3      # how many echo-requests we send
+    PING_TIMEOUT=2    # wait time (seconds) for each reply
+
+    echo -e "\n${YELLOW}Checking reachability of ECU at ${TARGET_IP} ...${NC}"
+
+    if ping -c "${PING_COUNT}" -W "${PING_TIMEOUT}" "${TARGET_IP}" >/dev/null 2>&1; then
+        show_success "ECU reachable."
+        echo -e "${YELLOW}Proceed with the NXP-S32G setup? [y/N]: ${NC}"
+    else
+        show_warn "Could NOT reach ${TARGET_IP}. Is the ECU powered on and connected?"
+        echo -e "${YELLOW}Attempt the NXP-S32G setup anyway? [y/N]: ${NC}"
+    fi
+
     read -r nxp_s32g_setup
     
     if [[ "$nxp_s32g_setup" =~ ^[Yy]$ ]]; then
         show_info "Calling NXP-S32G setup script..."
-        run_with_feedback "$CURRENT_DIR/scripts/k3s-agent-offline-install.sh" "NXP-S32G setup completed" "NXP-S32G setup failed"
+        run_with_feedback "$CURRENT_DIR/scripts/k3s-agent-offline-install.sh" \
+                        "NXP-S32G setup completed" \
+                        "NXP-S32G setup failed"
     else
-        show_info "NXP-S32G setup skipped (you can install later with calling './scripts/k3s-agent-offline-install.sh')"
+        show_info "NXP-S32G setup skipped (you can run it later with './scripts/k3s-agent-offline-install.sh')"
     fi
 
     ###############################################################################

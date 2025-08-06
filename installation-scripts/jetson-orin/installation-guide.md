@@ -23,7 +23,7 @@ root@s32g274ardb2:~#
 ### Environment
 Install Docker on your target system.
 ```shell
-sudo apt update; sudo apt install docker.io
+sudo apt update; sudo apt install docker.io; sudo apt-get install sshpass
 ```
 
 ## Installation guide
