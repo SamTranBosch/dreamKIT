@@ -94,6 +94,7 @@ spec:
       containers:
       - name: ${name}
         image: ${image}
+        imagePullPolicy: IfNotPresent
         env:
 ${env}
         args:
@@ -142,9 +143,19 @@ spec:
 
     // ── mirror job yaml (only if remote) ────────────────────────────
     if (info.isRemoteNode) {
-        const auto parts = image.split('/', Qt::SkipEmptyParts);
-        const QString rest = (parts.size() > 1 ? parts.mid(1).join('/') : image);
-        const QString mirrorImg = QString("localhost:5000/%1").arg(rest);
+      const auto parts = image.split('/', Qt::SkipEmptyParts);
+      QString rest;
+      
+      // Check if first part looks like a registry (contains '.' or ':')
+      if (parts.size() > 1 && (parts[0].contains('.') || parts[0].contains(':'))) {
+          // Has registry prefix, skip it
+          rest = parts.mid(1).join('/');
+      } else {
+          // No registry prefix, keep the whole image name
+          rest = image;
+      }
+      
+      const QString mirrorImg = QString("localhost:5000/%1").arg(rest);      
 
         static const char *mirrorTpl = R"(apiVersion: batch/v1
 kind: Job

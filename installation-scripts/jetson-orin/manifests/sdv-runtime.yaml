@@ -14,11 +14,13 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: xip
-      restartPolicy: Always
       hostNetwork: true
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
       containers:
       - name: sdv-runtime
         image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest
+        imagePullPolicy: IfNotPresent  # Never try to pull
         env:
         - name: USER
           value: "${DK_USER}"

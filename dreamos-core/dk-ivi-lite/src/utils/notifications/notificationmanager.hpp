@@ -61,6 +61,7 @@ class NotificationManager : public QObject
     Q_PROPERTY(bool globalMute READ globalMute WRITE setGlobalMute NOTIFY globalMuteChanged)
     Q_PROPERTY(int totalNotifications READ totalNotifications NOTIFY totalNotificationsChanged)
     Q_PROPERTY(int unreadCount READ unreadCount NOTIFY unreadCountChanged)
+    Q_PROPERTY(int queueCount READ queueCount NOTIFY queueCountChanged)
 
 public:
     static NotificationManager& instance() {
@@ -107,6 +108,7 @@ public:
     
     Q_INVOKABLE int totalNotifications() const { return m_totalCount; }
     Q_INVOKABLE int unreadCount() const { return m_unreadCount; }
+    Q_INVOKABLE int queueCount() const { return m_queue.size(); }
 
     // History and filtering
     Q_INVOKABLE QJsonArray getHistory(int limit = 50) const;
@@ -156,6 +158,7 @@ signals:
     
     // Queue and management signals
     void queueChanged();
+    void queueCountChanged();
     void maxVisibleNotificationsChanged();
     void globalMuteChanged();
     void totalNotificationsChanged();
@@ -175,6 +178,7 @@ public slots:
 private slots:
     void processQueue();
     void handleAutoDissmiss();
+    void cleanupOldNotifications();
 
 private:
     explicit NotificationManager(QObject *parent = nullptr);
@@ -186,9 +190,9 @@ private:
 
     QString generateId() const;
     void addToHistory(const NotificationData &data);
-    void cleanupOldNotifications();
     bool shouldQueue() const;
     void processNextInQueue();
+    void startQueueProcessing();
 
     QQueue<NotificationData> m_queue;
     QList<NotificationData> m_activeNotifications;

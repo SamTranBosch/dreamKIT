@@ -15,8 +15,10 @@ spec:
       nodeSelector:
         kubernetes.io/hostname: xip
       hostNetwork: true
+      terminationGracePeriodSeconds: 30
       containers:
       - name: dk-appinstallservice
+        imagePullPolicy: IfNotPresent  # Never try to pull
         image: ${DOCKER_HUB_NAMESPACE}/dk_appinstallservice:latest
         env:
         - { name: USER, value: "${DK_USER}" }

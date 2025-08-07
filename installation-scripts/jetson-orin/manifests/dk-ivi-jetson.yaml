@@ -14,8 +14,9 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: xip
-      restartPolicy: Always
       hostNetwork: true
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
       volumes:
       - name: dk-home
         hostPath: { path: ${HOME_DIR}/.dk }
@@ -40,6 +41,7 @@ spec:
       containers:
       - name: dk-ivi
         image: ${DOCKER_HUB_NAMESPACE}/dk_ivi:latest
+        imagePullPolicy: IfNotPresent  # Never try to pull
         env:
         - { name: DISPLAY, value: "${DISPLAY}" }
         - { name: XDG_RUNTIME_DIR, value: "${XDG_RUNTIME_DIR}" }

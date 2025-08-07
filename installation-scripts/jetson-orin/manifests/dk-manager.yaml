@@ -15,6 +15,8 @@ spec:
       nodeSelector:
         kubernetes.io/hostname: xip
       hostNetwork: true
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
       volumes:
       - name: dk-home
         hostPath: { path: ${HOME_DIR}/.dk }
@@ -23,6 +25,7 @@ spec:
       containers:
       - name: dk-manager
         image: ${DOCKER_HUB_NAMESPACE}/dk_manager:latest
+        imagePullPolicy: IfNotPresent  # Never try to pull
         env:
         - { name: USER, value: "${DK_USER}" }
         - { name: DOCKER_HUB_NAMESPACE, value: "${DOCKER_HUB_NAMESPACE}" }

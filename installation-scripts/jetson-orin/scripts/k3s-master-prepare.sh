@@ -49,14 +49,31 @@ sudo mkdir -p ~/.kube
 sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
 sudo chown $(id -u):$(id -g) ~/.kube/config
 
+# 3. for offline scenario
+sudo mkdir -p /etc/rancher/k3s
+sudo tee /etc/rancher/k3s/config.yaml << EOF
+write-kubeconfig-mode: "0644"
+# Minimal configuration for offline stability
+disable-network-policy: true
+disable-cloud-controller: true
+flannel-backend: "host-gw"
+kubelet-arg:
+  - "max-pods=50"
+  - "eviction-hard=memory.available<100Mi"
+disable:
+  - traefik
+  - metrics-server
+  - local-storage
+# Don't specify node-ip or flannel-iface - let k3s auto-detect
+EOF
 
-# 3. Extract node token and server IP (from the provided interface)
+# 4. Extract node token and server IP (from the provided interface)
 NODE_TOKEN=$(sudo cat /var/lib/rancher/k3s/server/node-token)
 
 echo -e "${BLUE} ${ARROW} Server IP ($SERVER_NET_IF): $SERVER_IP.${NC}"
 echo -e "${BLUE} ${ARROW} Node Token: $NODE_TOKEN.${NC}"
 
-# 3. Download K3s binaries for both amd64 and arm64
+# 5. Download K3s binaries for both amd64 and arm64
 sudo kubectl delete -f manifests/k3s-rancher-mirrored-pause-mirror.yaml --ignore-not-found
 sudo kubectl apply -f manifests/k3s-rancher-mirrored-pause-mirror.yaml
 
@@ -67,7 +84,7 @@ NODE_NET_IF="eth0"
 echo -e "${BLUE} ${ARROW} Prepare package for S32G with IP ($NODE_NET_IF): $NODE_IP.${NC}"
 
 
-# 4. Prepare agent service template (with placeholders)
+# 6. Prepare agent service template (with placeholders)
 cat <<EOF > ../nxp-s32g/scripts/k3s.service
 
 # Derived from the k3s install.sh's create_systemd_service_file() function
@@ -118,8 +135,8 @@ ExecStopPost=/bin/sh -c "if systemctl is-system-running | grep -i \
 EOF
 
 
-# 4) Configure containerd as a Mirror
-# With that in place, any Pod spec referring to ghcr.io/... will first try your local mirror at 192.168.56.48:5000, then fall back to the real ghcr.io if the mirror is missing.
+# 7) Configure containerd as a Mirror
+# With that in place, any Pod spec referring to ghcr.io/... will first try your local mirror at 192.168.56.2:5000, then fall back to the real ghcr.io if the mirror is missing.
 # You still must push the image to your local registry once (same docker pull / tag / push steps above), but future pulls even using the original ghcr.io/... name will come from your local mirror.
 cat >../nxp-s32g/scripts/registries.yaml <<EOF
 mirrors:

@@ -492,21 +492,21 @@ main() {
     PING_COUNT=3      # how many echo-requests we send
     PING_TIMEOUT=2    # wait time (seconds) for each reply
 
-    echo -e "\n${YELLOW}Checking reachability of ECU at ${TARGET_IP} ...${NC}"
+    show_info "Checking reachability of ECU at ${TARGET_IP} ..."
 
     if ping -c "${PING_COUNT}" -W "${PING_TIMEOUT}" "${TARGET_IP}" >/dev/null 2>&1; then
         show_success "ECU reachable."
-        echo -e "${YELLOW}Proceed with the NXP-S32G setup? [y/N]: ${NC}"
+        show_info "Proceed with the NXP-S32G setup? [y/N]: "
     else
-        show_warn "Could NOT reach ${TARGET_IP}. Is the ECU powered on and connected?"
-        echo -e "${YELLOW}Attempt the NXP-S32G setup anyway? [y/N]: ${NC}"
+        show_warning "Could NOT reach ${TARGET_IP}. Is the ECU powered on and connected?"
+        show_info "Attempt the NXP-S32G setup anyway? [y/N]: "
     fi
 
     read -r nxp_s32g_setup
     
     if [[ "$nxp_s32g_setup" =~ ^[Yy]$ ]]; then
         show_info "Calling NXP-S32G setup script..."
-        run_with_feedback "$CURRENT_DIR/scripts/k3s-agent-offline-install.sh" \
+        run_with_feedback "sudo $CURRENT_DIR/scripts/k3s-agent-offline-install.sh" \
                         "NXP-S32G setup completed" \
                         "NXP-S32G setup failed"
     else
@@ -548,7 +548,7 @@ main() {
 
     apply_manifest dk-manager.yaml
     run_with_feedback \
-    "sudo kubectl rollout status deployment/dk-manager --timeout=240s" \
+    "sudo kubectl rollout status deployment/dk-manager" \
     "DreamKit Manager is READY" \
     "Manager failed to start"
 
@@ -586,7 +586,7 @@ main() {
     fi
 
     run_with_feedback \
-        "sudo kubectl rollout status deployment/dk-ivi --timeout=300s" \
+        "sudo kubectl rollout status deployment/dk-ivi" \
         "IVI interface is READY" \
         "IVI failed to start"
     else

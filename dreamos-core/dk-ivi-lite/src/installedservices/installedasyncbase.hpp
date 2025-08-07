@@ -4,6 +4,9 @@
 #include <QProcess>
 #include <QJsonArray>
 #include <QEventLoop>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 
 #include "../utils/async/asyncjob.hpp"
 #include "../utils/core/datamanager.hpp"
@@ -16,6 +19,10 @@ extern QString DK_CONTAINER_ROOT;
 /* worker-node enum */
 enum class NodeStatus { Unknown, Online, Offline };
 Q_DECLARE_METATYPE(NodeStatus)
+
+/* WLAN connection enum */
+enum class WlanStatus { Unknown, Connected, Disconnected };
+Q_DECLARE_METATYPE(WlanStatus)
 
 /********************************************************************/
 template<class TI, class TD>
@@ -37,12 +44,16 @@ public:
     Q_INVOKABLE virtual void openAppEditor(int) { }          // optional
 
     bool workerNodeOnline() const { return m_nodeStatus == NodeStatus::Online; }
+    bool wlanConnected() const { return m_wlanStatus == WlanStatus::Connected; }
 
 protected:
     virtual void appendItemToQml(const TI&) = 0;
 
     /* subclasses return true if they want node monitoring */
     virtual bool wantsNodeMonitor() const { return false; }
+
+    /* subclasses return true if they want WLAN monitoring */
+    virtual bool wantsWlanMonitor() const { return false; }
 
     /* helper used by InstalledCheckThread */
     void fileChanged(const QString&);
@@ -56,15 +67,18 @@ protected:
 private:
     void onInstallerFinished(int, QProcess::ExitStatus);
     void checkWorkerNodeStatus();
+    void checkInternetConnection();
     void checkRunningAppSts();
     void updateInstalledList(const QJsonArray&);
 
     QList<TI>             m_items;
     InstalledCheckThread *m_checkThread {nullptr};
     QTimer               *m_nodeTimer   {nullptr};
+    QTimer               *m_wlanTimer   {nullptr};
     QTimer               *m_stsTimer    {nullptr};
     QProcess             *m_installer   {nullptr};
     NodeStatus            m_nodeStatus  {NodeStatus::Unknown};
+    WlanStatus            m_wlanStatus  {WlanStatus::Unknown};
 
     struct StRec { QString id; bool ok; int idx; };
     QList<StRec>          m_last;
@@ -112,6 +126,16 @@ InstalledAsyncBase<TI,TD>::InstalledAsyncBase(QObject *parent)
             connect(m_nodeTimer, &QTimer::timeout,
                     this, &InstalledAsyncBase<TI,TD>::checkWorkerNodeStatus);
             m_nodeTimer->start(5'000);
+        }
+    });
+
+    /* create WLAN-timer only when requested by subclass */
+    QTimer::singleShot(0, this, [this]() {
+        if ( this->wantsWlanMonitor() ) {
+            m_wlanTimer = new QTimer(this);
+            connect(m_wlanTimer, &QTimer::timeout,
+                    this, &InstalledAsyncBase<TI,TD>::checkInternetConnection);
+            m_wlanTimer->start(7'000);  // check every 7 seconds
         }
     });
 
@@ -355,6 +379,70 @@ void InstalledAsyncBase<TI,TD>::checkWorkerNodeStatus()
     if(ok) NOTIFY_SUCCESS("Node","vip online");
     else   NOTIFY_WARNING("Node","vip offline");
     static_cast<TD*>(this)->workerNodeStatusChanged(ok);
+}
+
+/* ------------ internet connection monitor --------------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::checkInternetConnection()
+{
+    // Create a network access manager if it doesn't exist
+    static QNetworkAccessManager* networkManager = nullptr;
+    if (!networkManager) {
+        networkManager = new QNetworkAccessManager(this);
+    }
+
+    // Create a simple HTTP request to check internet connectivity
+    QNetworkRequest request(QUrl("http://www.google.com"));
+    request.setRawHeader("User-Agent", "Mozilla/5.0");
+    
+    // Qt6 uses RedirectPolicyAttribute instead of FollowRedirectsAttribute
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, 
+                        QNetworkRequest::NoLessSafeRedirectPolicy);
+    
+    // Set a timeout for the request (Qt6 way)
+    request.setTransferTimeout(5000); // 5 seconds timeout
+    
+    QNetworkReply* reply = networkManager->head(request);
+    
+    // Handle the reply
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        WlanStatus newStatus = WlanStatus::Disconnected;
+        
+        if (reply->error() == QNetworkReply::NoError) {
+            // Successfully connected to the internet
+            newStatus = WlanStatus::Connected;
+        } else {
+            // Failed to connect - could be network issue, DNS issue, etc.
+            qDebug() << "[InternetCheck] Connection failed:" << reply->errorString();
+            newStatus = WlanStatus::Disconnected;
+        }
+        
+        // Only notify if status changed
+        if (newStatus != m_wlanStatus) {
+            m_wlanStatus = newStatus;
+            
+            if (newStatus == WlanStatus::Connected) {
+                NOTIFY_SUCCESS("Internet", "Internet connection available");
+            } else {
+                NOTIFY_WARNING("Internet", "No internet connection");
+            }
+            // Notify derived class about the status change
+            // static_cast<TD*>(this)->internetConnectionStatusChanged(newStatus == WlanStatus::Connected);
+        }
+        
+        reply->deleteLater();
+    });
+    
+    // Handle timeout and errors
+    connect(reply, &QNetworkReply::errorOccurred, this, [this, reply](QNetworkReply::NetworkError error) {
+        qDebug() << "[InternetCheck] Network error occurred:" << error << reply->errorString();
+        
+        if (m_wlanStatus != WlanStatus::Disconnected) {
+            m_wlanStatus = WlanStatus::Disconnected;
+            NOTIFY_WARNING("Internet", "No internet connection");
+            // static_cast<TD*>(this)->internetConnectionStatusChanged(false);
+        }
+    });
 }
 
 /* ------------ deployment monitor ------------------------------ */
