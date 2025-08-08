@@ -38,6 +38,7 @@ install_if_missing() {
             true true
     fi
 }
+
 # ---------------------------------------------------------------------------
 # Helper   install k9s when missing
 # ---------------------------------------------------------------------------
@@ -99,6 +100,142 @@ install_k9s() {
         true true
 }
 
+# ---------------------------------------------------------------------------
+# Helper   check Node.js version and compare with minimum required
+# ---------------------------------------------------------------------------
+check_node_version() {
+    local min_version="$1"
+    local current_version="$2"
+    
+    # Convert versions to comparable format (remove 'v' prefix and compare)
+    local min_ver_clean="${min_version#v}"
+    local current_ver_clean="${current_version#v}"
+    
+    # Use sort -V for version comparison
+    if printf '%s\n%s\n' "$min_ver_clean" "$current_ver_clean" | sort -V -C; then
+        return 0  # current >= minimum
+    else
+        return 1  # current < minimum
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Helper   install Node.js via NodeSource repository for latest versions
+# ---------------------------------------------------------------------------
+install_nodejs_nodesource() {
+    local target_version="${NODE_VERSION:-20}"  # Default to Node.js 20 LTS
+    
+    show_info "Installing Node.js v${target_version} via NodeSource repository..."
+    
+    # Remove any existing Node.js installations from apt
+    run_with_feedback \
+        "sudo apt-get remove -y nodejs npm" \
+        "Removed existing Node.js packages" \
+        "Failed to remove existing Node.js (continuing anyway)" \
+        false false
+    
+    # Install NodeSource repository
+    run_with_feedback \
+        "curl -fsSL https://deb.nodesource.com/setup_${target_version}.x | sudo -E bash -" \
+        "NodeSource repository added successfully" \
+        "Failed to add NodeSource repository" \
+        true true
+    
+    # Install Node.js
+    run_with_feedback \
+        "sudo apt-get install -y nodejs" \
+        "Node.js v${target_version} installed successfully" \
+        "Failed to install Node.js v${target_version}" \
+        true true
+}
+
+# ---------------------------------------------------------------------------
+# Helper   install Node.js with version checking
+# ---------------------------------------------------------------------------
+install_nodejs_with_version_check() {
+    local min_required_version="${MIN_NODE_VERSION:-18.5.0}"
+    local target_version="${NODE_VERSION:-20}"
+    
+    show_info "Checking Node.js installation (minimum required: v${min_required_version})..."
+    
+    if command -v node >/dev/null 2>&1; then
+        local current_version=$(node --version 2>/dev/null)
+        show_info "Found Node.js ${current_version}"
+        
+        if check_node_version "$min_required_version" "$current_version"; then
+            show_success "Node.js ${current_version} meets minimum requirement (v${min_required_version})"
+            
+            # Check if npm is available
+            if command -v npm >/dev/null 2>&1; then
+                local npm_version=$(npm --version 2>/dev/null)
+                show_info "npm ${npm_version} is available"
+                return 0
+            else
+                show_warning "npm not found, installing..."
+                install_if_missing npm
+                return $?
+            fi
+        else
+            show_warning "Node.js ${current_version} is below minimum required version v${min_required_version}"
+            show_info "Upgrading to Node.js v${target_version}..."
+            install_nodejs_nodesource
+        fi
+    else
+        show_info "Node.js not found, installing v${target_version}..."
+        install_nodejs_nodesource
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Helper   install Node Version Manager (nvm) as alternative
+# ---------------------------------------------------------------------------
+install_nvm() {
+    local nvm_version="${NVM_VERSION:-0.39.0}"
+    
+    if [ -s "$HOME/.nvm/nvm.sh" ]; then
+        show_info "NVM is already installed"
+        return 0
+    fi
+    
+    show_info "Installing Node Version Manager (nvm) v${nvm_version}..."
+    run_with_feedback \
+        "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${nvm_version}/install.sh | bash" \
+        "NVM installed successfully" \
+        "Failed to install NVM" \
+        true true
+    
+    # Source nvm for current session
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+}
+
+# ---------------------------------------------------------------------------
+# Helper   install Node.js via NVM with specific version
+# ---------------------------------------------------------------------------
+install_nodejs_via_nvm() {
+    local target_version="${NODE_VERSION:-20}"
+    
+    # Install NVM first
+    install_nvm
+    
+    # Source nvm
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    
+    if ! command -v nvm >/dev/null 2>&1; then
+        show_error "NVM installation failed or not properly sourced"
+        return 1
+    fi
+    
+    show_info "Installing Node.js v${target_version} via NVM..."
+    run_with_feedback \
+        "nvm install ${target_version} && nvm use ${target_version} && nvm alias default ${target_version}" \
+        "Node.js v${target_version} installed and set as default via NVM" \
+        "Failed to install Node.js v${target_version} via NVM" \
+        true true
+}
+
 install_dependencies() {
     local CURRENT_DIR="$1"
     local DK_USER="$2"
@@ -127,9 +264,18 @@ install_dependencies() {
     show_info "Installing SSH utilities..."
     install_if_missing sshpass
     
-    # 4) Node.js and npm
-    show_info "Installing Node.js development tools..."
-    install_if_missing npm
+    # 4) Node.js and npm with version management
+    show_info "Installing Node.js development tools with version management..."
+    
+    # Try NodeSource first, fallback to NVM if needed
+    if ! install_nodejs_with_version_check; then
+        show_warning "NodeSource installation failed, trying NVM..."
+        if ! install_nodejs_via_nvm; then
+            show_error "Both NodeSource and NVM installation methods failed"
+            show_info "Falling back to system package manager..."
+            install_if_missing npm
+        fi
+    fi
     
     # 5) Kubernetes tools
     show_info "Installing Kubernetes management tools..."
@@ -260,6 +406,7 @@ verify_dependencies() {
         "git:Git version control"
         "docker:Docker containerization"
         "sshpass:SSH password authentication"
+        "node:Node.js runtime"
         "npm:Node.js package manager"
         "k9s:Kubernetes management"
         "curl:HTTP client"
@@ -268,7 +415,7 @@ verify_dependencies() {
     )
     
     local failed_tools=()
-    
+
     for tool_info in "${tools[@]}"; do
         local tool="${tool_info%%:*}"
         local description="${tool_info#*:}"
