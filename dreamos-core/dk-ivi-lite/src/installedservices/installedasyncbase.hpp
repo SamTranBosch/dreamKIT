@@ -44,7 +44,12 @@ public:
     Q_INVOKABLE virtual void openAppEditor(int) { }          // optional
 
     bool workerNodeOnline() const { return m_nodeStatus == NodeStatus::Online; }
+    
+    /* restart options when internet is available */
     bool wlanConnected() const { return m_wlanStatus == WlanStatus::Connected; }
+    Q_INVOKABLE void restartSdvRuntime();
+    Q_INVOKABLE void restartApplication(); 
+    Q_INVOKABLE void forceRestartBoth();
 
 protected:
     virtual void appendItemToQml(const TI&) = 0;
@@ -68,6 +73,11 @@ private:
     void onInstallerFinished(int, QProcess::ExitStatus);
     void checkWorkerNodeStatus();
     void checkInternetConnection();
+    void showRestartOptions();
+    void handleInternetStatusChange(WlanStatus newStatus);
+    void autoRestartServices();
+    void performApplicationRestart();
+    void saveStateBeforeRestart();
     void checkRunningAppSts();
     void updateInstalledList(const QJsonArray&);
 
@@ -391,58 +401,576 @@ void InstalledAsyncBase<TI,TD>::checkInternetConnection()
         networkManager = new QNetworkAccessManager(this);
     }
 
-    // Create a simple HTTP request to check internet connectivity
-    QNetworkRequest request(QUrl("http://www.google.com"));
-    request.setRawHeader("User-Agent", "Mozilla/5.0");
+    // Try multiple endpoints for better reliability
+    static QStringList testUrls = {
+        // "http://8.8.8.8",           // Google DNS (IP-based, no DNS lookup needed)
+        // "http://1.1.1.1",           // Cloudflare DNS (IP-based)
+        "http://www.google.com",    // Domain-based as fallback
+        // "http://httpbin.org/get"    // Alternative test endpoint
+    };
     
-    // Qt6 uses RedirectPolicyAttribute instead of FollowRedirectsAttribute
+    static int currentUrlIndex = 0;
+    QString testUrl = testUrls[currentUrlIndex % testUrls.size()];
+    currentUrlIndex++;
+
+    // Fix: Use brace initialization to avoid most vexing parse
+    QUrl url{testUrl};
+    QNetworkRequest request{url};
+    
+    request.setRawHeader("User-Agent", "sdv-runtime/1.0");
+    
+    // Qt6 redirect policy
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, 
                         QNetworkRequest::NoLessSafeRedirectPolicy);
     
-    // Set a timeout for the request (Qt6 way)
-    request.setTransferTimeout(5000); // 5 seconds timeout
+    // Shorter timeout for faster detection
+    request.setTransferTimeout(3000); // 3 seconds timeout
     
     QNetworkReply* reply = networkManager->head(request);
     
     // Handle the reply
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, testUrl]() {
         WlanStatus newStatus = WlanStatus::Disconnected;
         
-        if (reply->error() == QNetworkReply::NoError) {
-            // Successfully connected to the internet
+        if (reply->error() == QNetworkReply::NoError || 
+            reply->error() == QNetworkReply::ContentNotFoundError) {
+            // Success or 404 both indicate internet connectivity
             newStatus = WlanStatus::Connected;
+            qDebug() << "[InternetCheck] Connection successful via:" << testUrl;
         } else {
-            // Failed to connect - could be network issue, DNS issue, etc.
-            qDebug() << "[InternetCheck] Connection failed:" << reply->errorString();
+            qDebug() << "[InternetCheck] Connection failed via" << testUrl 
+                     << "Error:" << reply->error() << reply->errorString();
             newStatus = WlanStatus::Disconnected;
         }
         
-        // Only notify if status changed
-        if (newStatus != m_wlanStatus) {
-            m_wlanStatus = newStatus;
-            
-            if (newStatus == WlanStatus::Connected) {
-                NOTIFY_SUCCESS("Internet", "Internet connection available");
-            } else {
-                NOTIFY_WARNING("Internet", "No internet connection");
-            }
-            // Notify derived class about the status change
-            // static_cast<TD*>(this)->internetConnectionStatusChanged(newStatus == WlanStatus::Connected);
-        }
+        // Handle status change
+        this->handleInternetStatusChange(newStatus);
         
         reply->deleteLater();
     });
     
     // Handle timeout and errors
-    connect(reply, &QNetworkReply::errorOccurred, this, [this, reply](QNetworkReply::NetworkError error) {
-        qDebug() << "[InternetCheck] Network error occurred:" << error << reply->errorString();
+    connect(reply, &QNetworkReply::errorOccurred, this, 
+            [this, reply, testUrl](QNetworkReply::NetworkError error) {
+        qDebug() << "[InternetCheck] Network error via" << testUrl 
+                 << "Error:" << error << reply->errorString();
         
-        if (m_wlanStatus != WlanStatus::Disconnected) {
-            m_wlanStatus = WlanStatus::Disconnected;
-            NOTIFY_WARNING("Internet", "No internet connection");
-            // static_cast<TD*>(this)->internetConnectionStatusChanged(false);
+        // Don't immediately mark as disconnected on single failure
+        // Let the finished handler deal with it
+    });
+}
+
+/* ------------ handle internet status change ------------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::handleInternetStatusChange(WlanStatus newStatus)
+{
+    if (newStatus == m_wlanStatus) return; // No change
+    
+    WlanStatus oldStatus = m_wlanStatus;
+    m_wlanStatus = newStatus;
+    
+    if (newStatus == WlanStatus::Connected) {
+        NOTIFY_SUCCESS("Internet", "Internet connection restored");
+        qDebug() << "[InternetCheck] Internet connection restored";
+        
+        // Only trigger restart options if we were previously disconnected
+        if (oldStatus == WlanStatus::Disconnected) {
+            // Auto-restart both services when internet comes back
+            QTimer::singleShot(2000, this, [this]() {
+                this->autoRestartServices();
+            });
+        }
+    } else {
+        NOTIFY_WARNING("Internet", "Internet connection lost");
+        qDebug() << "[InternetCheck] Internet connection lost";
+    }
+    
+    // Notify derived class about the status change
+    // static_cast<TD*>(this)->internetConnectionStatusChanged(newStatus == WlanStatus::Connected);
+}
+
+/* ------------ auto restart services when internet restored ---- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::autoRestartServices()
+{
+    static bool restartInProgress = false;
+    static uint32_t restartCycleCnt = 5;
+    if (restartInProgress) {
+        qDebug() << "[AutoRestart] Restart already in progress, skipping";
+        return;
+    }
+    if (--restartCycleCnt == 0) {
+        NOTIFY_WARNING("Auto Restart", "Restart already reach the threshold");
+        qDebug() << "[AutoRestart] Restart already reach the threshold";
+        return;
+    }
+    
+    restartInProgress = true;
+    
+    NOTIFY_INFO("Auto Restart", "Auto-restarting services due to internet restoration...");
+    qDebug() << "[AutoRestart] Starting auto-restart sequence";
+    
+    auto *chain = new Async::Chain(this);
+    auto sdvSuccess = std::make_shared<bool>(false);
+    auto errorMsg = std::make_shared<QString>();
+    auto deploymentExists = std::make_shared<bool>(false);
+
+    // Step 1: Check if SDV runtime deployment exists
+    chain->add([this, deploymentExists, errorMsg]() {
+        try {
+            qDebug() << "[AutoRestart] Step 1: Checking if SDV deployment exists";
+            
+            bool exists = false;
+            QMetaObject::invokeMethod(qApp, [&]() {
+                K3s::Installer inst;
+                QEventLoop loop;
+                const QStringList checkCmd{
+                    "kubectl get deployment sdv-runtime -n default --no-headers"
+                };
+                QObject::connect(&inst, &K3s::Installer::finished, &loop,
+                               [&](bool b) { exists = b; loop.quit(); });
+                inst.queueAndRun(checkCmd);
+                loop.exec();
+            }, Qt::BlockingQueuedConnection);
+
+            *deploymentExists = exists;
+            if (!exists) {
+                qDebug() << "[AutoRestart] SDV deployment not found, will skip restart";
+            } else {
+                qDebug() << "[AutoRestart] SDV deployment found, proceeding with restart";
+            }
+            return true;
+        } catch (const std::exception &e) {
+            *errorMsg = QString("Deployment check error: %1").arg(e.what());
+            qDebug() << "[AutoRestart] Exception during deployment check:" << e.what();
+            return true; // Continue anyway
         }
     });
+
+    // Step 2: Scale down deployment to 0 replicas (force stop)
+    chain->add([this, deploymentExists, sdvSuccess, errorMsg]() {
+        if (!*deploymentExists) {
+            qDebug() << "[AutoRestart] Step 2: Skipping scale down - deployment doesn't exist";
+            *sdvSuccess = true;
+            return true;
+        }
+
+        try {
+            qDebug() << "[AutoRestart] Step 2: Scaling down deployment to 0 replicas";
+            
+            bool scaleOk = false;
+            QMetaObject::invokeMethod(qApp, [&]() {
+                K3s::Installer inst;
+                QEventLoop loop;
+                const QStringList scaleCmd{
+                    "kubectl scale deployment sdv-runtime --replicas=0 -n default"
+                };
+                QObject::connect(&inst, &K3s::Installer::finished, &loop,
+                               [&](bool b) { scaleOk = b; loop.quit(); });
+                inst.queueAndRun(scaleCmd);
+                loop.exec();
+            }, Qt::BlockingQueuedConnection);
+
+            if (!scaleOk) {
+                *errorMsg = "Failed to scale down deployment";
+                qDebug() << "[AutoRestart] Failed to scale down deployment";
+                return true; // Continue anyway, maybe it's already down
+            } else {
+                qDebug() << "[AutoRestart] Successfully scaled down deployment";
+            }
+            
+            return true;
+        } catch (const std::exception &e) {
+            *errorMsg = QString("Scale down error: %1").arg(e.what());
+            qDebug() << "[AutoRestart] Exception during scale down:" << e.what();
+            return true; // Continue anyway
+        }
+    });
+
+    // Step 3: Wait for pods to terminate completely
+    chain->add([this, deploymentExists, errorMsg]() {
+        if (!*deploymentExists) {
+            qDebug() << "[AutoRestart] Step 3: Skipping pod termination wait - deployment doesn't exist";
+            return true;
+        }
+
+        try {
+            qDebug() << "[AutoRestart] Step 3: Waiting for pods to terminate";
+            
+            // Wait up to 30 seconds for pods to terminate
+            for (int i = 0; i < 30; ++i) {
+                bool podsRunning = false;
+                QMetaObject::invokeMethod(qApp, [&]() {
+                    K3s::Installer inst;
+                    QEventLoop loop;
+                    const QStringList checkCmd{
+                        "kubectl get pods -l app=sdv-runtime -n default --no-headers"
+                    };
+                    QObject::connect(&inst, &K3s::Installer::finished, &loop,
+                                   [&](bool b) { podsRunning = b; loop.quit(); });
+                    inst.queueAndRun(checkCmd);
+                    loop.exec();
+                }, Qt::BlockingQueuedConnection);
+
+                if (!podsRunning) {
+                    qDebug() << "[AutoRestart] All pods terminated after" << i << "seconds";
+                    break;
+                }
+                
+                qDebug() << "[AutoRestart] Waiting for pods to terminate... (" << (i+1) << "/30)";
+                QThread::msleep(1000); // Wait 1 second
+            }
+            
+            return true;
+        } catch (const std::exception &e) {
+            *errorMsg = QString("Pod termination wait error: %1").arg(e.what());
+            qDebug() << "[AutoRestart] Exception during pod termination wait:" << e.what();
+            return true; // Continue anyway
+        }
+    });
+
+    // Step 4: Check and clear any stuck resources
+    chain->add([this, deploymentExists, errorMsg]() {
+        if (!*deploymentExists) {
+            qDebug() << "[AutoRestart] Step 4: Skipping resource cleanup - deployment doesn't exist";
+            return true;
+        }
+
+        try {
+            qDebug() << "[AutoRestart] Step 4: Cleaning up any stuck resources";
+            
+            // Force delete any remaining pods
+            QMetaObject::invokeMethod(qApp, [&]() {
+                K3s::Installer inst;
+                QEventLoop loop;
+                const QStringList cleanupCmd{
+                    "kubectl delete pods -l app=sdv-runtime -n default --force --grace-period=0"
+                };
+                QObject::connect(&inst, &K3s::Installer::finished, &loop,
+                               [&](bool) { loop.quit(); }); // Don't care about result
+                inst.queueAndRun(cleanupCmd);
+                loop.exec();
+            }, Qt::BlockingQueuedConnection);
+
+            qDebug() << "[AutoRestart] Resource cleanup completed";
+            return true;
+        } catch (const std::exception &e) {
+            qDebug() << "[AutoRestart] Exception during resource cleanup:" << e.what();
+            return true; // Continue anyway
+        }
+    });
+
+    // Step 5: Wait a bit more to ensure clean state
+    chain->add([this, deploymentExists]() {
+        if (!*deploymentExists) {
+            qDebug() << "[AutoRestart] Step 5: Skipping wait - deployment doesn't exist";
+            return true;
+        }
+
+        qDebug() << "[AutoRestart] Step 5: Waiting for clean state";
+        QThread::msleep(3000); // Wait 3 seconds for clean state
+        return true;
+    });
+
+    // Step 6: Scale back up to 1 replica (fresh start)
+    chain->add([this, deploymentExists, sdvSuccess, errorMsg]() {
+        if (!*deploymentExists) {
+            qDebug() << "[AutoRestart] Step 6: Skipping scale up - deployment doesn't exist";
+            *sdvSuccess = true;
+            return true;
+        }
+
+        try {
+            qDebug() << "[AutoRestart] Step 6: Scaling up deployment to 1 replica";
+            
+            bool scaleOk = false;
+            QMetaObject::invokeMethod(qApp, [&]() {
+                K3s::Installer inst;
+                QEventLoop loop;
+                const QStringList scaleCmd{
+                    "kubectl scale deployment sdv-runtime --replicas=1 -n default"
+                };
+                QObject::connect(&inst, &K3s::Installer::finished, &loop,
+                               [&](bool b) { scaleOk = b; loop.quit(); });
+                inst.queueAndRun(scaleCmd);
+                loop.exec();
+            }, Qt::BlockingQueuedConnection);
+
+            *sdvSuccess = scaleOk;
+            if (!scaleOk) {
+                *errorMsg = "Failed to scale up deployment";
+                qDebug() << "[AutoRestart] Failed to scale up deployment";
+            } else {
+                qDebug() << "[AutoRestart] Successfully scaled up deployment";
+            }
+            
+            return true;
+        } catch (const std::exception &e) {
+            *errorMsg = QString("Scale up error: %1").arg(e.what());
+            qDebug() << "[AutoRestart] Exception during scale up:" << e.what();
+            return true;
+        }
+    });
+
+    // Step 7: Wait for new pods to be ready
+    chain->add([this, deploymentExists, sdvSuccess, errorMsg]() {
+        if (!*deploymentExists || !*sdvSuccess) {
+            qDebug() << "[AutoRestart] Step 7: Skipping readiness check";
+            return true;
+        }
+
+        try {
+            qDebug() << "[AutoRestart] Step 7: Waiting for new pods to be ready";
+            
+            // Wait up to 60 seconds for pods to be ready
+            bool podsReady = false;
+            for (int i = 0; i < 60; ++i) {
+                QMetaObject::invokeMethod(qApp, [&]() {
+                    K3s::Installer inst;
+                    QEventLoop loop;
+                    const QStringList checkCmd{
+                        "kubectl get pods -l app=sdv-runtime -n default -o jsonpath='{.items[*].status.phase}'"
+                    };
+                    QObject::connect(&inst, &K3s::Installer::finished, &loop,
+                                   [&](bool b) { 
+                                       // Check if we got "Running" status
+                                       podsReady = b;
+                                       loop.quit(); 
+                                   });
+                    inst.queueAndRun(checkCmd);
+                    loop.exec();
+                }, Qt::BlockingQueuedConnection);
+
+                if (podsReady) {
+                    qDebug() << "[AutoRestart] New pods are ready after" << i << "seconds";
+                    break;
+                }
+                
+                if (i % 5 == 0) { // Log every 5 seconds
+                    qDebug() << "[AutoRestart] Waiting for pods to be ready... (" << (i+1) << "/60)";
+                }
+                QThread::msleep(1000); // Wait 1 second
+            }
+            
+            if (!podsReady) {
+                *errorMsg += " (Warning: Pods may not be fully ready)";
+                qDebug() << "[AutoRestart] Warning: Pods may not be fully ready after 60 seconds";
+            }
+            
+            return true;
+        } catch (const std::exception &e) {
+            *errorMsg += QString(" Pod readiness error: %1").arg(e.what());
+            qDebug() << "[AutoRestart] Exception during pod readiness check:" << e.what();
+            return true;
+        }
+    });
+
+    // Step 8: Wait before restarting application
+    chain->add([this]() {
+        qDebug() << "[AutoRestart] Step 8: Waiting before app restart";
+        QThread::msleep(5000); // Wait 5 seconds for SDV to stabilize
+        return true;
+    });
+
+    // Step 9: Restart this application
+    // chain->add([this]() {
+    //     qDebug() << "[AutoRestart] Step 9: Restarting sdv-runtime application";
+    //     this->performApplicationRestart();
+    //     return true;
+    // });
+
+    // Cleanup and report results
+    connect(chain, &Async::Chain::finished, this, [deploymentExists, sdvSuccess, errorMsg](bool) {
+        restartInProgress = false;
+        
+        if (!*deploymentExists) {
+            NOTIFY_INFO("Auto Restart", "SDV deployment not found, only restarting application");
+            qDebug() << "[AutoRestart] Restart sequence completed - SDV deployment not found";
+        } else if (*sdvSuccess) {
+            NOTIFY_SUCCESS("Auto Restart", "Services restart sequence completed successfully");
+            qDebug() << "[AutoRestart] Restart sequence completed successfully";
+        } else {
+            NOTIFY_WARNING("Auto Restart", 
+                          QString("Restart completed with issues: %1").arg(*errorMsg));
+            qDebug() << "[AutoRestart] Restart completed with issues:" << *errorMsg;
+        }
+    });
+
+    connect(chain, &Async::Chain::finished, chain, &QObject::deleteLater);
+    chain->start();
+}
+
+/* ------------ perform application restart --------------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::performApplicationRestart()
+{
+    qDebug() << "[AppRestart] Saving state and preparing restart";
+    
+    // Save current state
+    this->saveStateBeforeRestart();
+    
+    // Try multiple restart methods
+    QString appPath = QCoreApplication::applicationFilePath();
+    QStringList args = QCoreApplication::arguments();
+    args.removeFirst(); // Remove program name
+    
+    qDebug() << "[AppRestart] App path:" << appPath;
+    qDebug() << "[AppRestart] Args:" << args;
+    
+    // Method 1: Try systemctl restart (most reliable for service)
+    if (QProcess::execute("systemctl", QStringList() << "is-active" << "sdv-runtime") == 0) {
+        qDebug() << "[AppRestart] Using systemctl restart";
+        QProcess::startDetached("systemctl", QStringList() << "restart" << "sdv-runtime");
+        QTimer::singleShot(1000, []() { QCoreApplication::quit(); });
+        return;
+    }
+    
+    // Method 2: Direct executable restart
+    qDebug() << "[AppRestart] Using direct executable restart";
+    if (QProcess::startDetached(appPath, args)) {
+        QTimer::singleShot(500, []() { QCoreApplication::quit(); });
+    } else {
+        // Method 3: Force exit and let external process manager restart
+        qDebug() << "[AppRestart] Force exit - relying on external restart";
+        QTimer::singleShot(500, []() { 
+            QCoreApplication::exit(42); // Special exit code for restart
+        });
+    }
+}
+
+/* ------------ manual restart methods (enhanced) --------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::restartSdvRuntime()
+{
+    if (m_wlanStatus != WlanStatus::Connected) {
+        NOTIFY_WARNING("Restart", "Internet connection required for restart");
+        return;
+    }
+
+    NOTIFY_INFO("SDV Runtime", "Manually restarting SDV runtime deployment...");
+    qDebug() << "[ManualRestart] Starting manual SDV restart";
+    
+    auto *chain = new Async::Chain(this);
+    auto success = std::make_shared<bool>(false);
+    auto errorMsg = std::make_shared<QString>();
+
+    chain->add([success, errorMsg]() {
+        try {
+            bool ok = false;
+            QMetaObject::invokeMethod(qApp, [&]() {
+                K3s::Installer inst;
+                QEventLoop loop;
+                const QStringList cmd{
+                    "kubectl rollout restart deployment/sdv-runtime -n default"
+                };
+                QObject::connect(&inst, &K3s::Installer::finished, &loop,
+                               [&](bool b) { ok = b; loop.quit(); });
+                inst.queueAndRun(cmd);
+                loop.exec();
+            }, Qt::BlockingQueuedConnection);
+
+            *success = ok;
+            if (!ok) {
+                *errorMsg = "kubectl rollout restart failed";
+            }
+            return true;
+        } catch (const std::exception &e) {
+            *errorMsg = QString("Restart error: %1").arg(e.what());
+            return true;
+        }
+    });
+
+    connect(chain, &Async::Chain::finished, this, [success, errorMsg](bool) {
+        if (*success) {
+            NOTIFY_SUCCESS("SDV Runtime", "SDV runtime deployment restart initiated");
+        } else {
+            NOTIFY_ERROR("SDV Runtime", 
+                        QString("Failed to restart SDV runtime: %1").arg(*errorMsg));
+        }
+    });
+
+    connect(chain, &Async::Chain::finished, chain, &QObject::deleteLater);
+    chain->start();
+}
+
+/* ------------ manual application restart ---------------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::restartApplication()
+{
+    if (m_wlanStatus != WlanStatus::Connected) {
+        NOTIFY_WARNING("Restart", "Internet connection required for restart");
+        return;
+    }
+
+    NOTIFY_INFO("Application", "Manually restarting sdv-runtime application in 3 seconds...");
+    qDebug() << "[ManualRestart] Manual application restart requested";
+    
+    QTimer::singleShot(3000, this, [this]() {
+        this->performApplicationRestart();
+    });
+}
+
+/* ------------ save state before restart ----------------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::saveStateBeforeRestart()
+{
+    try {
+        DataManager dm;
+        QJsonArray currentState;
+        
+        for (const auto& item : m_items) {
+            QJsonObject obj;
+            obj["id"] = item.id;
+            obj["name"] = item.name;
+            obj["author"] = item.author;
+            obj["rating"] = item.rating;
+            obj["thumbnail"] = item.iconPath;
+            obj["subscribed"] = item.isSubscribed;
+            currentState.append(obj);
+        }
+        
+        // Add timestamp
+        QJsonObject metadata;
+        metadata["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
+        metadata["reason"] = "auto_restart_internet_restored";
+        currentState.append(metadata);
+        
+        dm.save(dbKey() + "_restart_backup", currentState);
+        qDebug() << "[StateBackup] State saved before restart";
+        
+    } catch (const std::exception &e) {
+        qDebug() << "[StateBackup] Failed to save state:" << e.what();
+    }
+}
+
+/* ------------ force restart both (emergency option) ----------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::forceRestartBoth()
+{
+    if (m_wlanStatus != WlanStatus::Connected) {
+        NOTIFY_WARNING("Restart", "Internet connection required for restart");
+        return;
+    }
+
+    NOTIFY_WARNING("Force Restart", "Force restarting both SDV runtime and application...");
+    
+    auto *chain = new Async::Chain(this);
+
+    // Step 1: Restart SDV runtime
+    chain->add([this]() {
+        this->restartSdvRuntime();
+        QThread::msleep(5000); // Wait for SDV restart to begin
+        return true;
+    });
+
+    // Step 2: Restart application
+    // chain->add([this]() {
+    //     this->restartApplication();
+    //     return true;
+    // });
+
+    connect(chain, &Async::Chain::finished, chain, &QObject::deleteLater);
+    chain->start();
 }
 
 /* ------------ deployment monitor ------------------------------ */

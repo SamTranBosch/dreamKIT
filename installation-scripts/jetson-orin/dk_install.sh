@@ -186,80 +186,86 @@ apply_manifest() {
     # -----------------------------------------------------------------
     MANIFEST_DIR="${CURRENT_DIR}/manifests"
     local yaml="$1"
+    local tmp_dir="tmp/dk_manifests"
+    local parsed_yaml="${tmp_dir}/parsed_${yaml}"
+    
+    # Create tmp directory for parsed manifests
+    mkdir -p "$tmp_dir"
+    
     local VARS='${DOCKER_HUB_NAMESPACE} ${ARCH} ${DK_USER} ${RUNTIME_NAME} \
                 ${HOME_DIR} ${dk_vip_demo} ${DISPLAY} ${XDG_RUNTIME_DIR}'
+    
+    show_info "Processing manifest: ${BOLD}${yaml}${NC}"
+    show_info "Creating parsed version in: ${DIM}${parsed_yaml}${NC}"
+    
+    # Parse template and save to tmp folder
+    if envsubst "${VARS}" < "${MANIFEST_DIR}/${yaml}" > "${parsed_yaml}"; then
+        show_success "Manifest parsed successfully"
+        show_info "Parsed manifest saved to: ${CYAN}${parsed_yaml}${NC}"
+        
+        # Show some key information from the parsed manifest
+        if command -v yq >/dev/null 2>&1; then
+            local kind=$(yq eval '.kind' "${parsed_yaml}" 2>/dev/null || echo "Unknown")
+            local name=$(yq eval '.metadata.name' "${parsed_yaml}" 2>/dev/null || echo "Unknown")
+            show_info "Resource type: ${BOLD}${kind}${NC}, Name: ${BOLD}${name}${NC}"
+        fi
+        
+        # Apply the parsed manifest
     run_with_feedback \
-      "envsubst '${VARS}' < ${MANIFEST_DIR}/${yaml} | kubectl apply -f -" \
+            "kubectl apply -f '${parsed_yaml}'" \
       "Applied manifest ${yaml}" \
       "Failed to apply ${yaml}"
-}
-
-# ---------------------------------------------------------------------------
-# Helper   update package index
-# ---------------------------------------------------------------------------
-update_package_index() {
-    show_info "Updating package index …"
-    run_with_feedback \
-        "sudo apt-get update -y" \
-        "Package index updated" \
-        "Failed to update package index" \
-        true true
-}
-
-# ---------------------------------------------------------------------------
-# Helper   install a single deb package if the related command is absent
-#   $1   binary/command to look for
-#   $2   deb package to install (defaults to same as $1)
-# ---------------------------------------------------------------------------
-install_if_missing() {
-    local cmd_name="$1"
-    local deb_name="${2:-$1}"
-
-    if command -v "$cmd_name" >/dev/null 2>&1; then
-        show_info "$cmd_name is already installed"
+            
+        # Optional: Show what was applied
+        if [ $? -eq 0 ]; then
+            show_info "Manifest applied from: ${DIM}${parsed_yaml}${NC}"
+            show_info "You can inspect the parsed manifest for debugging"
+        fi
     else
-        show_info "Installing $deb_name …"
-        run_with_feedback \
-            "sudo apt-get install -y $deb_name" \
-            "$deb_name installed successfully" \
-            "Failed to install $deb_name" \
-            true true
+        show_error "Failed to parse manifest ${yaml}"
+        return 1
     fi
 }
-# ---------------------------------------------------------------------------
-# Helper   install k9s when missing
-# ---------------------------------------------------------------------------
-install_k9s() {
-    # ---- Version to pull (override via env K9S_VERSION) --------------------
-    local VERSION="${K9S_VERSION:-0.32.4}"
 
-    # ---- Detect architecture ----------------------------------------------
-    local ARCH
-    case "$(uname -m)" in
-        x86_64|amd64)   ARCH="x86_64" ;;
-        armv7l|armv7)   ARCH="armv7"  ;;
-        aarch64|arm64)  ARCH="arm64"  ;;
-        *)
-            show_error "Unsupported architecture: $(uname -m)"
-            return 1
-            ;;
-    esac
+# Enhanced function to clean up tmp manifests if needed
+cleanup_tmp_manifests() {
+    local tmp_dir="/tmp/dk_manifests"
+    if [ -d "$tmp_dir" ]; then
+        show_info "Cleaning up temporary manifest files..."
+        rm -rf "$tmp_dir"
+        show_success "Temporary manifests cleaned up"
+    fi
+}
 
-    # ---- Compose download URL ---------------------------------------------
-    local OS="linux"
-    local TARBALL="k9s_${VERSION}_${OS}_${ARCH}.tar.gz"
-    local URL="https://github.com/derailed/k9s/releases/download/v${VERSION}/${TARBALL}"
+# Enhanced function to show parsed manifest content (for debugging)
+show_parsed_manifest() {
+    local yaml="$1"
+    local tmp_dir="/tmp/dk_manifests"
+    local parsed_yaml="${tmp_dir}/parsed_${yaml}"
+    
+    if [ -f "$parsed_yaml" ]; then
+        echo -e "\n${CYAN}${BOLD}Parsed manifest content for ${yaml}:${NC}"
+        echo -e "${DIM}$(printf '─%.0s' {1..60})${NC}"
+        cat "$parsed_yaml"
+        echo -e "${DIM}$(printf '─%.0s' {1..60})${NC}\n"
+    else
+        show_warning "Parsed manifest not found: $parsed_yaml"
+    fi
+}
 
-    # ---- Download & install ------------------------------------------------
-    show_info "Downloading k9s v${VERSION} (${ARCH})"
-    run_with_feedback \
-        "tmp_dir=\$(mktemp -d) && \
-         curl -fsSL \"${URL}\" -o \"\$tmp_dir/${TARBALL}\" && \
-         sudo tar -C /usr/local/bin -xzf \"\$tmp_dir/${TARBALL}\" k9s && \
-         rm -rf \"\$tmp_dir\"" \
-        "k9s installed successfully" \
-        "Failed to install k9s" \
-        true true
+# Function to source sub-scripts
+source_subscript() {
+    local script_name="$1"
+    local script_path="$CURRENT_DIR/scripts/$script_name"
+    
+    if [ -f "$script_path" ]; then
+        show_info "Loading ${BOLD}${script_name}${NC}..."
+        source "$script_path"
+        return 0
+    else
+        show_error "Required script not found: $script_path"
+        return 1
+    fi
 }
 
 run_with_feedback() {
@@ -413,52 +419,22 @@ main() {
     
     run_with_feedback "docker network create dk_network 2>/dev/null || true" "Docker network 'dk_network' ready" "Network setup encountered issues"
     
-    # Step 6: Dependencies Installation
-    show_step 6 "Dependencies" "Installing required system utilities"
+    # Step 6: Dependencies Installation (moved to sub-script)
+    show_step 6 "Dependencies" "Installing required system utilities and tools"
     
-    # 0) Update repositories first (only once)
-    update_package_index
-    # 1) Git
-    install_if_missing git
-
-    # 2) Docker (package: docker.io)
-    install_if_missing docker docker.io
-
-    # Ensure Docker service is enabled & running
-    if systemctl is-active --quiet docker; then
-        show_info "Docker service already running"
+    # Source and execute dependencies installation script
+    if source_subscript "install_dependencies.sh"; then
+        install_dependencies "$CURRENT_DIR" "$DK_USER"
+        if [ $? -eq 0 ]; then
+            show_success "Dependencies installation completed"
     else
-        run_with_feedback \
-            "sudo systemctl enable --now docker" \
-            "Docker service enabled and started" \
-            "Failed to start Docker service" \
-            true true
-    fi
-
-    # Add current user to docker group (so `docker` can be run without sudo)
-    if groups "$USER" | grep -q '\bdocker\b'; then
-        show_info "User $USER is already in the docker group"
+            show_error "Dependencies installation failed"
+            exit 1
+        fi
     else
-        run_with_feedback \
-            "sudo usermod -aG docker $USER" \
-            "Added $USER to docker group (log out / in for it to take effect)" \
-            "Failed to add $USER to docker group" \
-            false true
+        show_error "Failed to load dependencies installation script"
+        exit 1
     fi
-
-    # 3) sshpass
-    install_if_missing sshpass
-    # 4) npm (nodejs is pulled in automatically)
-    install_if_missing npm
-    # 5) k9s
-    if command -v k9s >/dev/null 2>&1; then
-        show_info "k9s is already installed"
-    else
-        install_k9s
-    fi
-    
-    # Done
-    show_info "System utilities are ready"
 
     ###############################################################################
     # Step 7   local Docker registry
@@ -518,24 +494,24 @@ main() {
     ###############################################################################
     show_step 10 "SDV Runtime" "Setting up Software Defined Vehicle runtime environment"
 
-    # run_with_feedback \
-    # "sudo kubectl delete deployment sdv-runtime --ignore-not-found" \
-    # "Removed existing SDV runtime (if any)" "Cleanup warning"
+    run_with_feedback \
+    "sudo kubectl delete deployment sdv-runtime --ignore-not-found" \
+    "Removed existing SDV runtime (if any)" "Cleanup warning"
 
-    # apply_manifest sdv-runtime.yaml
-    # run_with_feedback \
-    # "sudo kubectl rollout status deployment/sdv-runtime --timeout=240s" \
-    # "SDV runtime is READY" \
-    # "SDV runtime failed to start"
+    apply_manifest sdv-runtime.yaml
+    run_with_feedback \
+    "sudo kubectl rollout status deployment/sdv-runtime" \
+    "SDV runtime is READY" \
+    "SDV runtime failed to start"
 
-    docker_pull_with_info "$DOCKER_HUB_NAMESPACE/sdv-runtime:latest" \
-        "Eclipse AutoWrx SDV runtime for vehicle application management" \
-        "GitHub Container Registry (Eclipse AutoWrx Project)"
+    # docker_pull_with_info "$DOCKER_HUB_NAMESPACE/sdv-runtime:latest" \
+    #     "Eclipse AutoWrx SDV runtime for vehicle application management" \
+    #     "GitHub Container Registry (Eclipse AutoWrx Project)"
     
-    show_info "Configuring SDV runtime container..."
-    show_info "RUNTIME_NAME: $RUNTIME_NAME"
-    run_with_feedback "docker kill sdv-runtime 2>/dev/null || true; docker rm sdv-runtime 2>/dev/null || true" "Cleaned up existing SDV runtime" "Cleanup warning"
-    run_with_feedback "docker run -d -it --name sdv-runtime --restart unless-stopped -e USER=$DK_USER -e RUNTIME_NAME=$RUNTIME_NAME --network host -e ARCH=$ARCH $DOCKER_HUB_NAMESPACE/sdv-runtime:latest" "SDV runtime container started on port 55555" "Failed to start SDV runtime"
+    # show_info "Configuring SDV runtime container..."
+    # show_info "RUNTIME_NAME: $RUNTIME_NAME"
+    # run_with_feedback "docker kill sdv-runtime 2>/dev/null || true; docker rm sdv-runtime 2>/dev/null || true" "Cleaned up existing SDV runtime" "Cleanup warning"
+    # run_with_feedback "docker run -d -it --name sdv-runtime --restart unless-stopped -e USER=$DK_USER -e RUNTIME_NAME=$RUNTIME_NAME --network host -e ARCH=$ARCH $DOCKER_HUB_NAMESPACE/sdv-runtime:latest" "SDV runtime container started on port 55555" "Failed to start SDV runtime"
     
     ###############################################################################
     # Step 11   DreamKit Manager

@@ -350,7 +350,7 @@ Rectangle {
         // Premium "dreamKIT" text
         Text {
             id: settings_page_header_text
-            text: "dreamKIT v1.1"
+            text: "dreamKIT v1.2"
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             font.bold: true

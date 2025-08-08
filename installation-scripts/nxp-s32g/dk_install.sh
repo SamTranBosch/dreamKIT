@@ -24,8 +24,8 @@ echo $CMD; $CMD
 
 CMD="systemctl daemon-reload"
 echo $CMD; $CMD
-CMD="systemctl restart k3s"
-echo $CMD; $CMD
+# CMD="systemctl restart k3s"
+# echo $CMD; $CMD
 
 
 # Can ultilities

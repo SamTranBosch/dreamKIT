@@ -34,6 +34,7 @@ show_info() {
 show_info "Stopping dk_ivi Docker container..."
 
 docker kill dk_ivi; docker rm dk_ivi ;
+kubectl delete deployment.apps/dk-ivi --ignore-not-found
 
 show_info "Docker container dk_ivi:latest stop successfully."
 show_info "You can restart it using the run.sh script or manually with Docker commands."
