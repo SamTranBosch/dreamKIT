@@ -43,7 +43,7 @@ install_if_missing() {
 # ---------------------------------------------------------------------------
 install_k9s() {
     # ---- Version to pull (override via env K9S_VERSION) --------------------
-    local VERSION="${K9S_VERSION:-0.32.5}"
+    local VERSION="${K9S_VERSION:-0.50.9}"
 
     # ---- Detect architecture ----------------------------------------------
     local ARCH
@@ -69,8 +69,9 @@ install_k9s() {
 
     # ---- Compose download URL ---------------------------------------------
     local OS="linux"
-    local TARBALL="k9s_${VERSION}_${OS}_${ARCH}.tar.gz"
+    local TARBALL="k9s_${OS}_${ARCH}.tar.gz"
     local URL="https://github.com/derailed/k9s/releases/download/v${VERSION}/${TARBALL}"
+    # https://github.com/derailed/k9s/releases/download/v0.50.9/k9s_Linux_arm64.tar.gz
 
     # ---- Verify URL exists before downloading -----------------------------
     show_info "Verifying k9s release availability for ${ARCH}..."
