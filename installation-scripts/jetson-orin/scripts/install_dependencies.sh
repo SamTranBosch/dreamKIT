@@ -43,16 +43,26 @@ install_if_missing() {
 # ---------------------------------------------------------------------------
 install_k9s() {
     # ---- Version to pull (override via env K9S_VERSION) --------------------
-    local VERSION="${K9S_VERSION:-0.32.4}"
+    local VERSION="${K9S_VERSION:-0.32.5}"
 
     # ---- Detect architecture ----------------------------------------------
     local ARCH
-    case "$(uname -m)" in
-        x86_64|amd64)   ARCH="x86_64" ;;
-        armv7l|armv7)   ARCH="armv7"  ;;
-        aarch64|arm64)  ARCH="arm64"  ;;
+    local UNAME_ARCH="$(uname -m)"
+    
+    case "$UNAME_ARCH" in
+        x86_64|amd64)   
+            ARCH="x86_64" 
+            ;;
+        armv7l|armv7)   
+            ARCH="armv7"  
+            ;;
+        aarch64|arm64)  
+            ARCH="arm64"
+            show_info "Detected ARM64 architecture (Jetson Orin compatible)"
+            ;;
         *)
-            show_error "Unsupported architecture: $(uname -m)"
+            show_error "Unsupported architecture: $UNAME_ARCH"
+            show_error "k9s supports: x86_64, armv7, arm64"
             return 1
             ;;
     esac
@@ -62,15 +72,29 @@ install_k9s() {
     local TARBALL="k9s_${VERSION}_${OS}_${ARCH}.tar.gz"
     local URL="https://github.com/derailed/k9s/releases/download/v${VERSION}/${TARBALL}"
 
+    # ---- Verify URL exists before downloading -----------------------------
+    show_info "Verifying k9s release availability for ${ARCH}..."
+    if ! curl -fsSL --head "$URL" >/dev/null 2>&1; then
+        show_error "k9s v${VERSION} not available for ${ARCH} architecture"
+        show_error "URL: $URL"
+        return 1
+    fi
+
     # ---- Download & install ------------------------------------------------
-    show_info "Downloading k9s v${VERSION} (${ARCH})"
+    show_info "Downloading k9s v${VERSION} for ${ARCH} (Jetson Orin)"
     run_with_feedback \
         "tmp_dir=\$(mktemp -d) && \
+         echo \"Downloading from: ${URL}\" && \
          curl -fsSL \"${URL}\" -o \"\$tmp_dir/${TARBALL}\" && \
+         echo \"Extracting k9s binary...\" && \
          sudo tar -C /usr/local/bin -xzf \"\$tmp_dir/${TARBALL}\" k9s && \
-         rm -rf \"\$tmp_dir\"" \
-        "k9s installed successfully" \
-        "Failed to install k9s" \
+         sudo chmod +x /usr/local/bin/k9s && \
+         echo \"Cleaning up temporary files...\" && \
+         rm -rf \"\$tmp_dir\" && \
+         echo \"Verifying installation...\" && \
+         k9s version --short" \
+        "k9s v${VERSION} installed successfully for ${ARCH}" \
+        "Failed to install k9s v${VERSION} for ${ARCH}" \
         true true
 }
 
@@ -153,10 +177,23 @@ install_k9s_if_missing() {
     if command -v k9s >/dev/null 2>&1; then
         show_info "k9s is already installed"
         local version=$(k9s version --short 2>/dev/null | head -n1 || echo "unknown")
-        show_info "Current k9s version: ${BOLD}$version${NC}"
+        local arch=$(uname -m)
+        show_info "Current k9s version: ${BOLD}$version${NC} (${arch})"
     else
-        show_info "Installing k9s Kubernetes management tool..."
-        install_k9s
+        show_info "Installing k9s Kubernetes management tool for Jetson Orin..."
+        if install_k9s; then
+            # Verify the installation worked
+            if command -v k9s >/dev/null 2>&1; then
+                local installed_version=$(k9s version --short 2>/dev/null | head -n1 || echo "unknown")
+                show_success "k9s installed successfully: ${BOLD}$installed_version${NC}"
+            else
+                show_error "k9s installation completed but command not found in PATH"
+                return 1
+            fi
+        else
+            show_error "k9s installation failed"
+            return 1
+        fi
     fi
 }
 
