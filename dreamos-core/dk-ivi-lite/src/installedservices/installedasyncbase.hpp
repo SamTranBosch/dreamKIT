@@ -135,7 +135,7 @@ InstalledAsyncBase<TI,TD>::InstalledAsyncBase(QObject *parent)
             m_nodeTimer = new QTimer(this);
             connect(m_nodeTimer, &QTimer::timeout,
                     this, &InstalledAsyncBase<TI,TD>::checkWorkerNodeStatus);
-            m_nodeTimer->start(5'000);
+            m_nodeTimer->start(7'000);
         }
     });
 
@@ -145,7 +145,7 @@ InstalledAsyncBase<TI,TD>::InstalledAsyncBase(QObject *parent)
             m_wlanTimer = new QTimer(this);
             connect(m_wlanTimer, &QTimer::timeout,
                     this, &InstalledAsyncBase<TI,TD>::checkInternetConnection);
-            m_wlanTimer->start(7'000);  // check every 7 seconds
+            m_wlanTimer->start(5'000);  // check every 5 seconds
         }
     });
 
@@ -436,10 +436,10 @@ void InstalledAsyncBase<TI,TD>::checkInternetConnection()
             reply->error() == QNetworkReply::ContentNotFoundError) {
             // Success or 404 both indicate internet connectivity
             newStatus = WlanStatus::Connected;
-            qDebug() << "[InternetCheck] Connection successful via:" << testUrl;
+            // qDebug() << "[InternetCheck] Connection successful via:" << testUrl;
         } else {
-            qDebug() << "[InternetCheck] Connection failed via" << testUrl 
-                     << "Error:" << reply->error() << reply->errorString();
+            // qDebug() << "[InternetCheck] Connection failed via" << testUrl 
+            //          << "Error:" << reply->error() << reply->errorString();
             newStatus = WlanStatus::Disconnected;
         }
         

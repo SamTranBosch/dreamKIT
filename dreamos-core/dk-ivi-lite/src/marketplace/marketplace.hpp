@@ -95,6 +95,7 @@ class MarketplaceViewModel : public QObject {
     void confirmInstall();
     bool confirmInstallPre(int idx);
     bool confirmInstallPost(int idx);
+    bool performCleanup(const QString &appId);
     void cancelInstall();
 
   signals:
@@ -116,6 +117,7 @@ class MarketplaceViewModel : public QObject {
 
     Async::Job<QList<AppInfo>>     *m_searchJob  = nullptr;
     Async::Chain                   *m_installChain = nullptr;
+    Async::Chain                   *m_cleanupChain = nullptr;
 
     K3s::Installer      *m_installer = nullptr;
     K3s::ManifestInfo    m_lastManifest;
@@ -123,6 +125,7 @@ class MarketplaceViewModel : public QObject {
     QStringList        m_installCommands;     // queue of kubectl steps
     int                m_installCmdIndex{0};  // current step index
     void               runNextInstallCommand();
+    bool               m_lastInstallationSuccess = false;
 
     int     m_currentCategory = 0;
     bool    m_isInstalling    = false;

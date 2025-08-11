@@ -81,10 +81,12 @@ Rectangle {
         }
 
         onUpdateServicesRunningSts: (appId, isStarted, idx) => {
-            var chkItem = appListView.itemAtIndex(idx);
-            var foundChild = findChildByObjectName(chkItem, appId);
-            if (foundChild) {
-                foundChild.checked = isStarted;
+            if (appId !== "") {
+                var chkItem = appListView.itemAtIndex(idx);
+                var foundChild = findChildByObjectName(chkItem, appId);
+                if (foundChild) {
+                    foundChild.checked = isStarted;
+                }
             }
         }
     }

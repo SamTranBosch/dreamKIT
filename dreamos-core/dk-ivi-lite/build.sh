@@ -37,4 +37,4 @@ docker build -t dk_ivi:latest --file Dockerfile .
 
 show_info "Docker image dk_ivi:latest built successfully."
 show_info "To run the dk_ivi container, use the following command:"
-show_info "./run.sh"
+show_info "./start.sh"

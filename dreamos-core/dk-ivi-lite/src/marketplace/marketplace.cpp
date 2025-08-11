@@ -280,6 +280,12 @@ void MarketplaceViewModel::confirmInstall()
     if (m_installChain) m_installChain->deleteLater();
     m_installChain = new Chain(this);
 
+    if (m_cleanupChain) m_cleanupChain->deleteLater();
+    m_cleanupChain = new Chain(this);
+
+    // Reset installation result tracker
+    m_lastInstallationSuccess = false;
+
     /* ----------------------------------------------------------- *
      * step-0  : heavy disk-IO (worker thread)                     *
      * ----------------------------------------------------------- */
@@ -296,25 +302,17 @@ void MarketplaceViewModel::confirmInstall()
         QStringList cmds;
 
         if (m_lastManifest.isRemoteNode) {
-            cmds << QString("kubectl delete job mirror-%1 --ignore-not-found")
-                        .arg(app.id)
-                << QString("kubectl apply -f %1")
+            cmds << QString("kubectl apply -f %1")
                         .arg(m_lastManifest.mirrorJobYaml)
                 << QString("kubectl wait --for=condition=complete "
                             "job/mirror-%1 --timeout=300s")
-                        .arg(app.id)
-                << QString("kubectl delete job mirror-%1 --ignore-not-found")
                         .arg(app.id);
         }
 
-        cmds << QString("kubectl delete job pull-%1 --ignore-not-found")
-                    .arg(app.id)
-            << QString("kubectl apply -f %1")
+        cmds << QString("kubectl apply -f %1")
                     .arg(m_lastManifest.pullJobYaml)
             << QString("kubectl wait --for=condition=complete "
-                        "job/pull-%1 --timeout=3000s")
-                    .arg(app.id)
-            << QString("kubectl delete job pull-%1 --ignore-not-found")
+                        "job/pull-%1 --timeout=600s")
                     .arg(app.id);
 
         /* 2) execute in GUI thread through *existing* m_installer ----- */
@@ -355,19 +353,88 @@ void MarketplaceViewModel::confirmInstall()
         return confirmInstallPost(idx);
     });
 
-    /* -------------- final result ------------------------------- */
+    /* -------------- Setup cleanup chain ------------------------ */
+    m_cleanupChain->add([this, app]()->bool{
+        return performCleanup(app.id);
+    });
+
+    /* -------------- Install chain result handler --------------- */
     connect(m_installChain, &Chain::finished,
             this, [this](bool ok){
+        m_lastInstallationSuccess = ok;
+        
+        if (ok) {
+            qDebug() << "[MarketplaceViewModel::confirmInstall] Installation completed successfully, starting cleanup...";
+        } else {
+            qDebug() << "[MarketplaceViewModel::confirmInstall] Installation failed, starting cleanup anyway...";
+        }
+        
+        // Always start cleanup chain regardless of installation result
+        m_cleanupChain->start();
+    });
+
+    /* -------------- Cleanup chain result handler --------------- */
+    connect(m_cleanupChain, &Chain::finished,
+            this, [this](bool cleanupOk){
         m_installPending = false;
         emit installPendingChanged(false);
-        if (ok)  emit installFinished();
-        else     emit installError();
+        
+        if (cleanupOk) {
+            qDebug() << "[MarketplaceViewModel::confirmInstall] Cleanup completed successfully.";
+        } else {
+            qWarning() << "[MarketplaceViewModel::confirmInstall] Cleanup failed.";
+        }
+        
+        // Emit appropriate signal based on installation result
+        if (m_lastInstallationSuccess) {
+            emit installFinished();
+        } else {
+            emit installError();
+        }
 
         m_installChain->deleteLater();
         m_installChain = nullptr;
+        m_cleanupChain->deleteLater();
+        m_cleanupChain = nullptr;
     });
 
     m_installChain->start();
+}
+
+bool MarketplaceViewModel::performCleanup(const QString &appId)
+{
+    QStringList cleanupCmds;
+    cleanupCmds << QString("kubectl delete job mirror-%1 --ignore-not-found")
+                       .arg(appId)
+               << QString("kubectl delete job pull-%1 --ignore-not-found")
+                       .arg(appId);
+
+    bool ok = false;
+
+    QMetaObject::invokeMethod(
+        qApp,                                   // jump to GUI thread
+        [this, cleanupCmds, &ok]()
+        {
+            QEventLoop loop;
+
+            /* capture final result */
+            connect(m_installer, &K3s::Installer::finished,
+                    &loop,
+                    [&](bool result){ ok = result; loop.quit(); },
+                    Qt::QueuedConnection);
+
+            m_installer->queueAndRun(cleanupCmds);
+            loop.exec();                        // wait for finished()
+        },
+        Qt::BlockingQueuedConnection);          // block worker thread
+
+    if(ok) {
+        qDebug() << "[MarketplaceViewModel::performCleanup] Cleanup commands executed successfully for app:" << appId;
+    } else {
+        qWarning() << "[MarketplaceViewModel::performCleanup] Failed to execute cleanup commands for app:" << appId;
+        // Note: cleanup failure is not critical, continue with installation
+    }
+    return true;  // Always continue even if cleanup fails
 }
 
 bool MarketplaceViewModel::confirmInstallPre(int idx)
