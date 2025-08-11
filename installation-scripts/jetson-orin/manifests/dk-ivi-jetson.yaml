@@ -66,208 +66,19 @@ spec:
         runAsNonRoot: false
         runAsUser: 0
       
-      # Enhanced init container with kubectl binary compatibility fix
+      # Simple one-liner init container
       initContainers:
       - name: wait-for-sdv-runtime
-        image: alpine:latest  # Lightweight and ARM64 compatible
+        image: alpine:latest
         imagePullPolicy: IfNotPresent
-        command: ['sh', '-c']
-        args:
-        - |
-          set -e
-          echo "Starting in offline mode on Jetson Orin (ARM64)"
-          echo "Architecture: $(uname -m)"
-          
-          # Wait for service account token
-          echo "Waiting for service account token to be available..."
-          for i in $(seq 1 30); do
-            if [ -f /var/run/secrets/kubernetes.io/serviceaccount/token ]; then
-              echo "Service account token found"
-              break
-            fi
-            echo "Waiting for service account token... attempt $i/30"
-            sleep 2
-          done
-          
-          # Check kubectl binary architecture and compatibility
-          echo "Checking kubectl binary..."
-          if [ -f /usr/local/bin/kubectl ]; then
-            echo "Kubectl binary found, checking architecture..."
-            file /usr/local/bin/kubectl || echo "File command not available"
-            
-            # Test if kubectl is ARM64 compatible
-            if /usr/local/bin/kubectl version --client --short 2>/dev/null; then
-              echo "Kubectl binary is compatible"
-              KUBECTL_AVAILABLE=true
-            else
-              echo "Kubectl binary is not compatible with ARM64 or missing dependencies"
-              echo "Falling back to alternative methods..."
-              KUBECTL_AVAILABLE=false
-            fi
-          else
-            echo "Kubectl binary not found at /usr/local/bin/kubectl"
-            KUBECTL_AVAILABLE=false
-          fi
-          
-          # Alternative approach using curl and k8s API directly
-          if [ "$KUBECTL_AVAILABLE" = "false" ]; then
-            echo "Using direct Kubernetes API calls instead of kubectl..."
-            
-            # Set up API access
-            KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-            KUBE_CA_CERT="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-            
-            # Determine API server endpoint
-            if [ -n "$KUBERNETES_SERVICE_HOST" ]; then
-              API_SERVER="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT:-443}"
-            else
-              API_SERVER="https://kubernetes.default.svc.cluster.local:443"
-            fi
-            
-            echo "API Server: $API_SERVER"
-            
-            # Test API connectivity
-            echo "Testing Kubernetes API connectivity..."
-            API_SUCCESS=false
-            for api_attempt in $(seq 1 5); do
-              echo "API test attempt $api_attempt/5..."
-              
-              if wget --quiet --timeout=10 --tries=1 \
-                --header="Authorization: Bearer $KUBE_TOKEN" \
-                --ca-certificate="$KUBE_CA_CERT" \
-                --output-document=- \
-                "$API_SERVER/api/v1/namespaces/default" >/dev/null 2>&1; then
-                echo "Kubernetes API is accessible"
-                API_SUCCESS=true
-                break
-              else
-                echo "API connectivity failed, retrying..."
-                sleep 3
-              fi
-            done
-            
-            if [ "$API_SUCCESS" = "true" ]; then
-              # Check for sdv-runtime deployment using API
-              echo "Checking for sdv-runtime deployment via API..."
-              
-              DEPLOYMENT_CHECK=$(wget --quiet --timeout=10 --tries=1 \
-                --header="Authorization: Bearer $KUBE_TOKEN" \
-                --ca-certificate="$KUBE_CA_CERT" \
-                --output-document=- \
-                "$API_SERVER/apis/apps/v1/namespaces/default/deployments/sdv-runtime" 2>/dev/null || echo "not_found")
-              
-              if [ "$DEPLOYMENT_CHECK" != "not_found" ]; then
-                echo "SDV Runtime deployment found via API"
-                
-                # Wait for deployment readiness using API polling
-                echo "Waiting for SDV Runtime readiness..."
-                for wait_attempt in $(seq 1 60); do
-                  echo "Readiness check $wait_attempt/60..."
-                  
-                  DEPLOYMENT_STATUS=$(wget --quiet --timeout=5 --tries=1 \
-                    --header="Authorization: Bearer $KUBE_TOKEN" \
-                    --ca-certificate="$KUBE_CA_CERT" \
-                    --output-document=- \
-                    "$API_SERVER/apis/apps/v1/namespaces/default/deployments/sdv-runtime" 2>/dev/null || echo "error")
-                  
-                  if echo "$DEPLOYMENT_STATUS" | grep -q '"readyReplicas":1'; then
-                    echo "SDV Runtime deployment is ready"
-                    break
-                  fi
-                  
-                  if [ $wait_attempt -eq 60 ]; then
-                    echo "Timeout waiting for SDV Runtime, but continuing..."
-                    break
-                  fi
-                  
-                  sleep 5
-                done
-              else
-                echo "SDV Runtime deployment not found via API"
-              fi
-            else
-              echo "API connectivity failed, proceeding without checks..."
-            fi
-          else
-            # Use kubectl if available and working
-            echo "Using kubectl for deployment checks..."
-            
-            # Set proper kubeconfig
-            export KUBECONFIG=/root/.kube/config
-            
-            # Test kubectl connectivity with better error handling
-            echo "Testing kubectl connectivity..."
-            KUBECTL_SUCCESS=false
-            for attempt in $(seq 1 5); do
-              echo "Kubectl test attempt $attempt/5..."
-              
-              # More specific kubectl test
-              if timeout 15s /usr/local/bin/kubectl get namespaces default >/dev/null 2>&1; then
-                echo "Kubectl connectivity established"
-                KUBECTL_SUCCESS=true
-                break
-              else
-                echo "Kubectl connectivity failed, retrying in 5 seconds..."
-                sleep 5
-              fi
-            done
-            
-            if [ "$KUBECTL_SUCCESS" = "true" ]; then
-              # Proceed with kubectl checks
-              echo "Checking for sdv-runtime deployment..."
-              if timeout 15s /usr/local/bin/kubectl get deployment sdv-runtime >/dev/null 2>&1; then
-                echo "SDV Runtime deployment found, waiting for readiness..."
-                
-                # Custom wait with timeout
-                for wait_attempt in $(seq 1 60); do
-                  READY_REPLICAS=$(/usr/local/bin/kubectl get deployment sdv-runtime -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-                  if [ "$READY_REPLICAS" = "1" ]; then
-                    echo "SDV Runtime is ready"
-                    break
-                  fi
-                  echo "Waiting for SDV Runtime... $wait_attempt/60"
-                  sleep 5
-                done
-              else
-                echo "SDV Runtime deployment not found"
-              fi
-            else
-              echo "Kubectl failed after all attempts, continuing anyway..."
-            fi
-          fi
-          
-          echo "Init container completed successfully"
-        
-        securityContext:
-          runAsNonRoot: false
-          runAsUser: 0
-        
-        volumeMounts:
-        - name: kubectl-binary
-          mountPath: /usr/local/bin/kubectl
-          readOnly: true
-        - name: kube-config
-          mountPath: /root/.kube/config
-          readOnly: true
-        # Mount service account token explicitly
-        - name: service-account-token
-          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
-          readOnly: true
-        
+        command: ['sh', '-c', 'echo "Waiting 20 seconds for sdv-runtime..."; sleep 20; echo "Ready to start dk-ivi"']
         resources:
           requests:
-            memory: "64Mi"
-            cpu: "50m"
+            memory: "16Mi"
+            cpu: "10m"
           limits:
-            memory: "256Mi"
-            cpu: "200m"
-        
-        # Environment variables for API access
-        env:
-        - name: KUBERNETES_SERVICE_HOST
-          value: "kubernetes.default.svc.cluster.local"
-        - name: KUBERNETES_SERVICE_PORT
-          value: "443"
+            memory: "32Mi"
+            cpu: "25m"
       
       volumes:
       - name: dk-home
@@ -294,23 +105,6 @@ spec:
         hostPath:
           path: /usr/bin/docker
           type: File
-      # Service account token volume
-      - name: service-account-token
-        projected:
-          sources:
-          - serviceAccountToken:
-              path: token
-              expirationSeconds: 3600
-          - configMap:
-              name: kube-root-ca.crt
-              items:
-              - key: ca.crt
-                path: ca.crt
-          - downwardAPI:
-              items:
-              - path: namespace
-                fieldRef:
-                  fieldPath: metadata.namespace
       
       containers:
       - name: dk-ivi
