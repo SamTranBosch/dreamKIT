@@ -68,52 +68,159 @@ spec:
       # Init container to wait for sdv-runtime
       initContainers:
       - name: wait-for-sdv-runtime
-        image: bitnami/kubectl:latest
+        # Use ARM64 compatible image or busybox for better compatibility
+        image: busybox:latest
         imagePullPolicy: IfNotPresent
         command: ['sh', '-c']
         args:
         - |
           set -e
-          echo "Starting in offline mode - using local images only"
-          echo "Checking kubectl permissions..."
+          echo "Starting in offline mode on Jetson Orin - using local images only"
+          echo "Architecture: $(uname -m)"
           
-          # Test permissions with timeout to avoid hanging
-          timeout 10s kubectl auth can-i get deployments || { 
-            echo "Warning: No permission to get deployments, continuing anyway..."; 
-          }
-          timeout 10s kubectl auth can-i get pods || { 
-            echo "Warning: No permission to get pods, continuing anyway..."; 
-          }
+          # Wait for service account token to be properly mounted (Jetson Orin timing issue)
+          echo "Waiting for service account token to be available..."
+          for i in $(seq 1 30); do
+            if [ -f /var/run/secrets/kubernetes.io/serviceaccount/token ]; then
+              echo "Service account token found"
+              break
+            fi
+            echo "Waiting for service account token... attempt $i/30"
+            sleep 2
+          done
           
-          echo "Checking for sdv-runtime deployment..."
-          if timeout 30s kubectl get deployment sdv-runtime >/dev/null 2>&1; then
-            echo "SDV Runtime deployment found, waiting for it to be available..."
+          # Verify kubectl binary exists and is executable
+          if [ ! -x /usr/local/bin/kubectl ]; then
+            echo "Error: kubectl binary not found or not executable"
+            ls -la /usr/local/bin/ || true
+            exit 1
+          fi
+          
+          # Set proper kubeconfig with explicit token
+          export KUBECONFIG=/root/.kube/config
+          
+          # Test kubectl with explicit timeout and retry logic
+          echo "Testing kubectl connectivity..."
+          KUBECTL_SUCCESS=false
+          for attempt in $(seq 1 10); do
+            echo "Kubectl test attempt $attempt/10..."
             
-            # Wait with shorter timeout and better error handling
-            if timeout 180s kubectl wait --for=condition=available --timeout=180s deployment/sdv-runtime; then
-              echo "SDV Runtime deployment is available"
+            # Test basic connectivity first
+            if timeout 15s /usr/local/bin/kubectl version --client >/dev/null 2>&1; then
+              echo "Kubectl client working"
               
-              echo "Waiting for sdv-runtime pod to be ready..."
-              if timeout 120s kubectl wait --for=condition=ready --timeout=120s pod -l app=sdv-runtime; then
-                echo "SDV Runtime pod is ready"
+              # Test server connectivity
+              if timeout 15s /usr/local/bin/kubectl get namespaces >/dev/null 2>&1; then
+                echo "Kubectl server connectivity established"
+                KUBECTL_SUCCESS=true
+                break
               else
-                echo "Warning: SDV Runtime pod not ready, but continuing..."
-                kubectl get pods -l app=sdv-runtime || true
+                echo "Server connectivity failed, retrying..."
               fi
             else
-              echo "Warning: SDV Runtime deployment not available, but continuing..."
-              kubectl describe deployment sdv-runtime || true
+              echo "Kubectl client test failed, retrying..."
+            fi
+            
+            sleep 5
+          done
+          
+          if [ "$KUBECTL_SUCCESS" = "false" ]; then
+            echo "Warning: kubectl connectivity failed after all attempts"
+            echo "Continuing without kubectl checks..."
+            echo "This might be due to RBAC timing issues on Jetson Orin"
+            exit 0  # Continue anyway
+          fi
+          
+          # Test permissions with explicit error handling
+          echo "Testing RBAC permissions..."
+          PERM_CHECK_SUCCESS=false
+          for perm_attempt in $(seq 1 5); do
+            echo "Permission check attempt $perm_attempt/5..."
+            
+            if timeout 10s /usr/local/bin/kubectl auth can-i get deployments 2>/dev/null; then
+              echo "Deployment permissions: OK"
+              if timeout 10s /usr/local/bin/kubectl auth can-i get pods 2>/dev/null; then
+                echo "Pod permissions: OK"
+                PERM_CHECK_SUCCESS=true
+                break
+              fi
+            fi
+            
+            echo "Permission check failed, waiting for RBAC propagation..."
+            sleep 3
+          done
+          
+          if [ "$PERM_CHECK_SUCCESS" = "false" ]; then
+            echo "Warning: RBAC permissions not ready, but continuing..."
+            echo "This is common on Jetson Orin due to timing issues"
+          fi
+          
+          # Check for sdv-runtime with robust error handling
+          echo "Checking for sdv-runtime deployment..."
+          SDV_FOUND=false
+          for sdv_attempt in $(seq 1 5); do
+            echo "SDV runtime check attempt $sdv_attempt/5..."
+            
+            if timeout 15s /usr/local/bin/kubectl get deployment sdv-runtime >/dev/null 2>&1; then
+              echo "SDV Runtime deployment found"
+              SDV_FOUND=true
+              break
+            else
+              echo "SDV Runtime not found or not accessible, retrying..."
+              sleep 3
+            fi
+          done
+          
+          if [ "$SDV_FOUND" = "true" ]; then
+            echo "Waiting for SDV Runtime to be available..."
+            
+            # Custom wait logic with better error handling for Jetson Orin
+            WAIT_SUCCESS=false
+            for wait_attempt in $(seq 1 60); do
+              echo "SDV Runtime readiness check $wait_attempt/60..."
+              
+              # Check deployment status
+              READY_REPLICAS=$(/usr/local/bin/kubectl get deployment sdv-runtime -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+              DESIRED_REPLICAS=$(/usr/local/bin/kubectl get deployment sdv-runtime -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+              
+              if [ "$READY_REPLICAS" = "$DESIRED_REPLICAS" ] && [ "$READY_REPLICAS" != "0" ]; then
+                echo "SDV Runtime deployment is ready ($READY_REPLICAS/$DESIRED_REPLICAS replicas)"
+                
+                # Check pod status
+                POD_STATUS=$(/usr/local/bin/kubectl get pods -l app=sdv-runtime -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "Unknown")
+                if [ "$POD_STATUS" = "Running" ]; then
+                  echo "SDV Runtime pod is running"
+                  WAIT_SUCCESS=true
+                  break
+                fi
+              fi
+              
+              if [ $wait_attempt -eq 60 ]; then
+                echo "Timeout waiting for SDV Runtime, but continuing..."
+                /usr/local/bin/kubectl describe deployment sdv-runtime || true
+                /usr/local/bin/kubectl get pods -l app=sdv-runtime || true
+                break
+              fi
+              
+              sleep 5
+            done
+            
+            if [ "$WAIT_SUCCESS" = "true" ]; then
+              echo "SDV Runtime is fully ready"
+            else
+              echo "Warning: SDV Runtime readiness timeout, but continuing..."
             fi
           else
             echo "SDV Runtime deployment not found - this might be expected"
             echo "Continuing with IVI interface startup..."
           fi
           
-          echo "Init container completed successfully"
+          echo "Init container completed successfully on Jetson Orin"
         
         securityContext:
           runAsNonRoot: false
           runAsUser: 0
+        
         volumeMounts:
         - name: kubectl-binary
           mountPath: /usr/local/bin/kubectl
@@ -121,13 +228,26 @@ spec:
         - name: kube-config
           mountPath: /root/.kube/config
           readOnly: true
+        # Mount service account token explicitly for Jetson Orin
+        - name: service-account-token
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
+        
         resources:
           requests:
             memory: "64Mi"
             cpu: "50m"
           limits:
-            memory: "128Mi"
-            cpu: "100m"
+            memory: "256Mi"  # Increased for Jetson Orin
+            cpu: "200m"
+        
+        # Add environment variables for better debugging
+        env:
+        - name: KUBERNETES_SERVICE_HOST
+          value: "kubernetes.default.svc.cluster.local"
+        - name: KUBERNETES_SERVICE_PORT
+          value: "443"
+      
       volumes:
       - name: dk-home
         hostPath: 
@@ -153,6 +273,24 @@ spec:
         hostPath:
           path: /usr/bin/docker
           type: File
+      # Explicitly mount service account token for Jetson Orin
+      - name: service-account-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+              - key: ca.crt
+                path: ca.crt
+          - downwardAPI:
+              items:
+              - path: namespace
+                fieldRef:
+                  fieldPath: metadata.namespace
+      
       containers:
       - name: dk-ivi
         image: ${DOCKER_HUB_NAMESPACE}/dk_ivi:latest
