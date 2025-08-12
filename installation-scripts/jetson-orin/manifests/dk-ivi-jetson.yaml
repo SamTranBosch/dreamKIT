@@ -71,7 +71,7 @@ spec:
       - name: wait-for-sdv-runtime
         image: alpine:latest
         imagePullPolicy: IfNotPresent
-        command: ['sh', '-c', 'echo "Waiting 20 seconds for sdv-runtime..."; sleep 20; echo "Ready to start dk-ivi"']
+        command: ['sh', '-c', 'echo "Waiting 10 seconds for sdv-runtime..."; sleep 10; echo "Ready to start dk-ivi"']
         resources:
           requests:
             memory: "16Mi"
