@@ -20,7 +20,7 @@ spec:
       containers:
       - name: sdv-runtime
         image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest
-        imagePullPolicy: IfNotPresent  # Never try to pull
+        imagePullPolicy: IfNotPresent
         env:
         - name: USER
           value: "${DK_USER}"
@@ -31,3 +31,17 @@ spec:
         ports:
         - containerPort: 55555
           hostPort: 55555
+        volumeMounts:
+        - name: data-storage
+          mountPath: /app/data
+        - name: config-storage
+          mountPath: /app/config
+      volumes:
+      - name: data-storage
+        hostPath:
+          path: /home/${DK_USER}/.dk/sdv-runtime/data
+          type: DirectoryOrCreate
+      - name: config-storage
+        hostPath:
+          path: /home/${DK_USER}/.dk/sdv-runtime/config
+          type: DirectoryOrCreate

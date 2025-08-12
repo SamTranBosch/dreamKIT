@@ -494,7 +494,7 @@ template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::autoRestartServices()
 {
     static bool restartInProgress = false;
-    static uint32_t restartCycleCnt = 5;
+    static uint32_t restartCycleCnt = 3;
     if (restartInProgress) {
         qDebug() << "[AutoRestart] Restart already in progress, skipping";
         return;
