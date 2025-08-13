@@ -1,0 +1,16 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dk-manager-pull
+spec:
+  template:
+    spec:
+      hostNetwork: true
+      nodeSelector:
+        kubernetes.io/hostname: xip
+      restartPolicy: Never
+      containers:
+      - name: dk-manager-pull
+        image: ${DOCKER_HUB_NAMESPACE}/dk_manager:latest
+        imagePullPolicy: Always
+        command: ["true"]
