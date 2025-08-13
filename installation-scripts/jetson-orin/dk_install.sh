@@ -494,7 +494,15 @@ main() {
     ###############################################################################
     show_step 10 "SDV Runtime" "Setting up Software Defined Vehicle runtime environment"
 
+    # Export variables for sub-scripts
+    export HOME_DIR
+    export DK_USER
     scripts/setup_default_vss.sh
+
+    apply_manifest sdv-runtime-pull.yaml
+    run_with_feedback \
+        "sudo kubectl delete job sdv-runtime-pull --ignore-not-found" \
+        "Pull latest sdv-runtime image" "Cleanup warning"
 
     run_with_feedback \
     "sudo kubectl delete deployment sdv-runtime --ignore-not-found" \
@@ -511,9 +519,14 @@ main() {
     ###############################################################################
     show_step 11 "DreamKit Manager" "Installing core management services"
 
+    apply_manifest dk-manager-pull.yaml
+    run_with_feedback \
+        "sudo kubectl delete job dk-manager-pull --ignore-not-found" \
+        "Pull latest dk-manager image" "Cleanup warning"
+
     run_with_feedback \
     "sudo kubectl delete deployment dk-manager --ignore-not-found" \
-    "Removed existing manager (if any)" "Manager cleanup warning"
+    "Removed existing manager (if any)" "Cleanup warning"
 
     apply_manifest dk-manager.yaml
     run_with_feedback \
@@ -543,9 +556,14 @@ main() {
                         "X11 forwarding enabled" "X11 setup failed"
     run_with_feedback "xhost +local:docker" "Docker X11 access granted" "X11 access failed"
 
+    apply_manifest dk-ivi-pull.yaml
+    run_with_feedback \
+        "sudo kubectl delete job dk-ivi-pull --ignore-not-found" \
+        "Pull latest IVI image" "Cleanup warning"
+
     run_with_feedback \
         "sudo kubectl delete deployment dk-ivi --ignore-not-found" \
-        "Removed existing IVI (if any)" "IVI cleanup warning"
+        "Removed existing IVI (if any)" "Cleanup warning"
 
     # Decide which manifest to apply
     if [ -f "/etc/nv_tegra_release" ]; then
