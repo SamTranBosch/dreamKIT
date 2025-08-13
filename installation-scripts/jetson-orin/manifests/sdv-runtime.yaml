@@ -17,10 +17,35 @@ spec:
       hostNetwork: true
       restartPolicy: Always
       terminationGracePeriodSeconds: 30
+      initContainers:
+      - name: setup-vss
+        image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest  # Same as main container
+        imagePullPolicy: IfNotPresent  # Don't try to pull if exists
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          echo "Initializing VSS file (offline mode)..."
+          mkdir -p /persistent
+          mkdir -p /shared
+          
+          # Load from persistent storage or create default
+          if [ -f /persistent/vss.json ]; then
+            echo "Loading existing VSS file from persistent storage"
+            cp /persistent/vss.json /shared/vss.json
+          fi
+          
+          chmod 666 /shared/vss.json
+          echo "VSS initialization complete (offline)"
+        volumeMounts:
+        - name: persistent-storage
+          mountPath: /persistent
+        - name: shared-vss
+          mountPath: /shared
       containers:
       - name: sdv-runtime
         image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: IfNotPresent  # Critical for offline operation
         env:
         - name: USER
           value: "${DK_USER}"
@@ -28,20 +53,61 @@ spec:
           value: "${RUNTIME_NAME}"
         - name: ARCH
           value: "${ARCH}"
+        - name: OFFLINE_MODE
+          value: "true"  # Signal to app it's running offline
         ports:
         - containerPort: 55555
           hostPort: 55555
         volumeMounts:
-        - name: data-storage
-          mountPath: /app/data
-        - name: config-storage
-          mountPath: /app/config
+        - name: shared-vss
+          mountPath: /home/dev/ws/vss.json
+          subPath: vss.json
+      
+      - name: vss-sync
+        image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest  # Same image
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          echo "Starting VSS sync service (offline mode)..."
+          
+          sync_file() {
+            if [ -f /shared/vss.json ]; then
+              # Simple file comparison without external tools
+              if ! cmp -s /shared/vss.json /persistent/vss.json 2>/dev/null; then
+                echo "$(date): VSS file changed, syncing to persistent storage"
+                cp /shared/vss.json /persistent/vss.json
+                sync  # Force filesystem sync
+                echo "$(date): Sync completed"
+              fi
+            fi
+          }
+          
+          # Initial sync
+          sync_file
+          
+          # Continuous monitoring with longer intervals for offline efficiency
+          while true; do
+            sync_file
+            sleep 10  # Check every 10 seconds (adjust as needed)
+          done
+        volumeMounts:
+        - name: persistent-storage
+          mountPath: /persistent
+        - name: shared-vss
+          mountPath: /shared
+        resources:
+          requests:
+            memory: "16Mi"
+            cpu: "10m"
+          limits:
+            memory: "32Mi"
+            cpu: "50m"
       volumes:
-      - name: data-storage
+      - name: persistent-storage
         hostPath:
-          path: /home/${DK_USER}/.dk/sdv-runtime/data
+          path: /home/${DK_USER}/.dk/sdv-runtime
           type: DirectoryOrCreate
-      - name: config-storage
-        hostPath:
-          path: /home/${DK_USER}/.dk/sdv-runtime/config
-          type: DirectoryOrCreate
+      - name: shared-vss
+        emptyDir: {}
