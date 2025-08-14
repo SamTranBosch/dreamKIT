@@ -1,0 +1,738 @@
+sdv-orin@ubuntu:~/working/dreamKIT$ kubectl get all -o wide
+NAME                                            READY   STATUS      RESTARTS   AGE         IP              NODE   NOMINATED NODE   READINESS GATES
+pod/6878e120946463a9a7d6d541-857799c777-ct2vp   0/1     Completed   90         139m        192.168.56.49   vip    <none>           <none>
+pod/6890a3afe4bb77b728f898be-7d5bf4dd4c-pdtj5   0/1     Unknown     15         139m        192.168.56.49   vip    <none>           <none>
+pod/dk-ivi-85d85c8bb5-z77lk                     0/1     Unknown     0          <invalid>   192.168.56.48   xip    <none>           <none>
+pod/dk-manager-554c4bb4c-szsr9                  0/1     Unknown     1          <invalid>   192.168.56.48   xip    <none>           <none>
+pod/mirror-k3s-rancher-mirrored-pause-xhxzq     0/1     Completed   0          <invalid>   192.168.56.48   xip    <none>           <none>
+pod/sdv-runtime-7b65bf8656-46nlb                0/2     Unknown     0          <invalid>   192.168.56.48   xip    <none>           <none>
+
+NAME                 TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE    SELECTOR
+service/kubernetes   ClusterIP   10.43.0.1    <none>        443/TCP   5d4h   <none>
+
+NAME                                       READY   UP-TO-DATE   AVAILABLE   AGE         CONTAINERS                 IMAGES                                                                                  SELECTOR
+deployment.apps/6878e120946463a9a7d6d541   0/1     1            0           153m        6878e120946463a9a7d6d541   ghcr.io/ync1hc/dk_service_can_provider:latest                                           app=6878e120946463a9a7d6d541
+deployment.apps/6890a3afe4bb77b728f898be   0/1     1            0           152m        6890a3afe4bb77b728f898be   ghcr.io/samtranbosch/dk_service_can_provider:latest                                     app=6890a3afe4bb77b728f898be
+deployment.apps/dk-ivi                     0/1     1            0           <invalid>   dk-ivi                     ghcr.io/samtranbosch/dk_ivi:latest                                                      app=dk-ivi
+deployment.apps/dk-manager                 0/1     1            0           <invalid>   dk-manager                 ghcr.io/eclipse-autowrx/dk_manager:latest                                               app=dk-manager
+deployment.apps/sdv-runtime                0/1     1            0           <invalid>   sdv-runtime,vss-sync       ghcr.io/eclipse-autowrx/sdv-runtime:latest,ghcr.io/eclipse-autowrx/sdv-runtime:latest   app=sdv-runtime
+
+NAME                                                  DESIRED   CURRENT   READY   AGE         CONTAINERS                 IMAGES                                                                                  SELECTOR
+replicaset.apps/6878e120946463a9a7d6d541-857799c777   1         1         0       153m        6878e120946463a9a7d6d541   ghcr.io/ync1hc/dk_service_can_provider:latest                                           app=6878e120946463a9a7d6d541,pod-template-hash=857799c777
+replicaset.apps/6890a3afe4bb77b728f898be-7d5bf4dd4c   1         1         0       152m        6890a3afe4bb77b728f898be   ghcr.io/samtranbosch/dk_service_can_provider:latest                                     app=6890a3afe4bb77b728f898be,pod-template-hash=7d5bf4dd4c
+replicaset.apps/dk-ivi-85d85c8bb5                     1         1         0       <invalid>   dk-ivi                     ghcr.io/samtranbosch/dk_ivi:latest                                                      app=dk-ivi,pod-template-hash=85d85c8bb5
+replicaset.apps/dk-manager-554c4bb4c                  1         1         0       <invalid>   dk-manager                 ghcr.io/eclipse-autowrx/dk_manager:latest                                               app=dk-manager,pod-template-hash=554c4bb4c
+replicaset.apps/sdv-runtime-7b65bf8656                1         1         0       <invalid>   sdv-runtime,vss-sync       ghcr.io/eclipse-autowrx/sdv-runtime:latest,ghcr.io/eclipse-autowrx/sdv-runtime:latest   app=sdv-runtime,pod-template-hash=7b65bf8656
+
+NAME                                          STATUS     COMPLETIONS   DURATION   AGE         CONTAINERS                          IMAGES                             SELECTOR
+job.batch/mirror-6895959ae4bb77b728f89f5f     Failed     0/1           132m       132m        mirror                              quay.io/containers/skopeo:latest   batch.kubernetes.io/controller-uid=6b80ac07-f09e-484c-a293-2671a0c035c8
+job.batch/mirror-k3s-rancher-mirrored-pause   Complete   1/1           17s        <invalid>   mirror-k3s-rancher-mirrored-pause   quay.io/containers/skopeo:latest   batch.kubernetes.io/controller-uid=1dc44d46-d8ce-40e4-8ff2-7cd3f422247c
+sdv-orin@ubuntu:~/working/dreamKIT$ kubectl describe pod/dk-ivi-85d85c8bb5-z77lk
+Name:             dk-ivi-85d85c8bb5-z77lk
+Namespace:        default
+Priority:         0
+Service Account:  dk-ivi-service-account
+Node:             xip/192.168.56.48
+Start Time:       Wed, 13 Aug 2025 19:55:37 +0700
+Labels:           app=dk-ivi
+                  pod-template-hash=85d85c8bb5
+Annotations:      <none>
+Status:           Running
+IP:               192.168.56.48
+IPs:
+  IP:           192.168.56.48
+Controlled By:  ReplicaSet/dk-ivi-85d85c8bb5
+Init Containers:
+  wait-for-sdv-runtime:
+    Container ID:  
+    Image:         alpine:latest
+    Image ID:      
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      sh
+      -c
+      echo "Waiting 10 seconds for sdv-runtime..."; sleep 10; echo "Ready to start dk-ivi"
+    State:          Waiting
+      Reason:       PodInitializing
+    Last State:     Terminated
+      Reason:       ContainerStatusUnknown
+      Message:      The container could not be located when the pod was deleted.  The container used to be Running
+      Exit Code:    137
+      Started:      Mon, 01 Jan 0001 00:00:00 +0000
+      Finished:     Mon, 01 Jan 0001 00:00:00 +0000
+    Ready:          False
+    Restart Count:  2
+    Limits:
+      cpu:     25m
+      memory:  32Mi
+    Requests:
+      cpu:        10m
+      memory:     16Mi
+    Environment:  <none>
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-4zd8t (ro)
+Containers:
+  dk-ivi:
+    Container ID:   containerd://f949b8037592dbde42389d3421a8c7f57cccb64d01f094a9249ea3d05e3be4d9
+    Image:          ghcr.io/samtranbosch/dk_ivi:latest
+    Image ID:       ghcr.io/samtranbosch/dk_ivi@sha256:7a723d9578d6fe18277835027ed8d08b395858d47ce2e76a515805bd51b08162
+    Port:           <none>
+    Host Port:      <none>
+    State:          Terminated
+      Reason:       Unknown
+      Exit Code:    255
+      Started:      Wed, 13 Aug 2025 19:55:49 +0700
+      Finished:     Wed, 13 Aug 2025 19:46:11 +0700
+    Ready:          False
+    Restart Count:  0
+    Environment:
+      DISPLAY:                  :0
+      XDG_RUNTIME_DIR:          /run/user/1000
+      QT_QUICK_BACKEND:         software
+      DKCODE:                   dreamKIT
+      DK_USER:                  sdv-orin
+      DK_VIP:                   
+      DK_DOCKER_HUB_NAMESPACE:  ghcr.io/samtranbosch
+      DK_ARCH:                  arm64
+      DK_CONTAINER_ROOT:        /app/.dk/
+      KUBECONFIG:               /root/.kube/config
+    Mounts:
+      /app/.dk from dk-home (rw)
+      /root/.kube/config from kube-config (ro)
+      /tmp/.X11-unix from x11-unix (rw)
+      /usr/bin/docker from docker-binary (ro)
+      /usr/local/bin/kubectl from kubectl-binary (ro)
+      /var/run/docker.sock from docker-sock (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-4zd8t (ro)
+Conditions:
+  Type                        Status
+  PodReadyToStartContainers   False 
+  Initialized                 True 
+  Ready                       False 
+  ContainersReady             False 
+  PodScheduled                True 
+Volumes:
+  dk-home:
+    Type:          HostPath (bare host directory volume)
+    Path:          /home/sdv-orin/.dk
+    HostPathType:  DirectoryOrCreate
+  x11-unix:
+    Type:          HostPath (bare host directory volume)
+    Path:          /tmp/.X11-unix
+    HostPathType:  Directory
+  kubectl-binary:
+    Type:          HostPath (bare host directory volume)
+    Path:          /usr/local/bin/kubectl
+    HostPathType:  File
+  kube-config:
+    Type:          HostPath (bare host directory volume)
+    Path:          /home/sdv-orin/.kube/config
+    HostPathType:  File
+  docker-sock:
+    Type:          HostPath (bare host directory volume)
+    Path:          /var/run/docker.sock
+    HostPathType:  Socket
+  docker-binary:
+    Type:          HostPath (bare host directory volume)
+    Path:          /usr/bin/docker
+    HostPathType:  File
+  kube-api-access-4zd8t:
+    Type:                    Projected (a volume that contains injected data from multiple sources)
+    TokenExpirationSeconds:  3607
+    ConfigMapName:           kube-root-ca.crt
+    Optional:                false
+    DownwardAPI:             true
+QoS Class:                   Burstable
+Node-Selectors:              kubernetes.io/hostname=xip
+Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+                             node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
+Events:
+  Type     Reason                  Age               From               Message
+  ----     ------                  ----              ----               -------
+  Normal   Scheduled               <invalid>         default-scheduler  Successfully assigned default/dk-ivi-85d85c8bb5-z77lk to xip
+  Normal   Pulled                  51s               kubelet            Container image "alpine:latest" already present on machine
+  Normal   Created                 51s               kubelet            Created container: wait-for-sdv-runtime
+  Normal   Started                 50s               kubelet            Started container wait-for-sdv-runtime
+  Normal   Killing                 50s               kubelet            Stopping container wait-for-sdv-runtime
+  Warning  FailedCreatePodSandBox  1s (x6 over 40s)  kubelet            Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "dk-ivi-85d85c8bb5-z77lk_default_a154293b-aee0-4ecc-9ffd-aa6fffd958d9_1": name "dk-ivi-85d85c8bb5-z77lk_default_a154293b-aee0-4ecc-9ffd-aa6fffd958d9_1" is reserved for "ad87cc51a40a373d8438709e16ca0dbdb86276cfbce97e625c6cbfaf296c6d2a"
+  Normal   SandboxChanged          1s (x7 over 51s)  kubelet            Pod sandbox changed, it will be killed and re-created.
+  Normal   Pulled                  <invalid>         kubelet            Container image "alpine:latest" already present on machine
+  Normal   Created                 <invalid>         kubelet            Created container: wait-for-sdv-runtime
+  Normal   Started                 <invalid>         kubelet            Started container wait-for-sdv-runtime
+  Normal   Pulled                  <invalid>         kubelet            Container image "ghcr.io/samtranbosch/dk_ivi:latest" already present on machine
+  Normal   Created                 <invalid>         kubelet            Created container: dk-ivi
+  Normal   Started                 <invalid>         kubelet            Started container dk-ivi
+sdv-orin@ubuntu:~/working/dreamKIT$ ifconfig
+br-2533b3e81caa: flags=4099<UP,BROADCAST,MULTICAST>  mtu 1500
+        inet 172.18.0.1  netmask 255.255.0.0  broadcast 172.18.255.255
+        ether 02:42:78:0c:62:0c  txqueuelen 0  (Ethernet)
+        RX packets 0  bytes 0 (0.0 B)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 0  bytes 0 (0.0 B)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+br-75b8b6fcdf9c: flags=4099<UP,BROADCAST,MULTICAST>  mtu 1500
+        inet 172.19.0.1  netmask 255.255.0.0  broadcast 172.19.255.255
+        ether 02:42:82:19:e9:ca  txqueuelen 0  (Ethernet)
+        RX packets 0  bytes 0 (0.0 B)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 0  bytes 0 (0.0 B)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+cni0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 10.42.0.1  netmask 255.255.255.0  broadcast 10.42.0.255
+        inet6 fe80::c021:88ff:fe51:a8f4  prefixlen 64  scopeid 0x20<link>
+        ether c2:21:88:51:a8:f4  txqueuelen 1000  (Ethernet)
+        RX packets 299  bytes 21653 (21.6 KB)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 267  bytes 26083 (26.0 KB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+docker0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 172.17.0.1  netmask 255.255.0.0  broadcast 172.17.255.255
+        inet6 fe80::42:99ff:feca:c12a  prefixlen 64  scopeid 0x20<link>
+        ether 02:42:99:ca:c1:2a  txqueuelen 0  (Ethernet)
+        RX packets 0  bytes 0 (0.0 B)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 58  bytes 6928 (6.9 KB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 192.168.56.48  netmask 255.0.0.0  broadcast 192.255.255.255
+        inet6 fe80::310:f86b:7335:af89  prefixlen 64  scopeid 0x20<link>
+        ether 48:b0:2d:83:1d:8e  txqueuelen 1000  (Ethernet)
+        RX packets 2342  bytes 286314 (286.3 KB)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 2383  bytes 1234241 (1.2 MB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+lo: flags=73<UP,LOOPBACK,RUNNING>  mtu 65536
+        inet 127.0.0.1  netmask 255.0.0.0
+        inet6 ::1  prefixlen 128  scopeid 0x10<host>
+        loop  txqueuelen 1000  (Local Loopback)
+        RX packets 19539  bytes 8679240 (8.6 MB)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 19539  bytes 8679240 (8.6 MB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+rndis0: flags=4099<UP,BROADCAST,MULTICAST>  mtu 1500
+        ether e6:3c:e9:c9:ac:51  txqueuelen 1000  (Ethernet)
+        RX packets 0  bytes 0 (0.0 B)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 0  bytes 0 (0.0 B)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+usb0: flags=4099<UP,BROADCAST,MULTICAST>  mtu 1500
+        ether e6:3c:e9:c9:ac:53  txqueuelen 1000  (Ethernet)
+        RX packets 0  bytes 0 (0.0 B)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 0  bytes 0 (0.0 B)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+veth8951fc7: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet6 fe80::889a:67ff:fe35:703d  prefixlen 64  scopeid 0x20<link>
+        ether 8a:9a:67:35:70:3d  txqueuelen 0  (Ethernet)
+        RX packets 0  bytes 0 (0.0 B)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 82  bytes 9709 (9.7 KB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+vethb1212e93: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet6 fe80::4cc2:c7ff:fee5:7a53  prefixlen 64  scopeid 0x20<link>
+        ether 4e:c2:c7:e5:7a:53  txqueuelen 1000  (Ethernet)
+        RX packets 287  bytes 24895 (24.8 KB)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 260  bytes 24776 (24.7 KB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+vethce0eabd: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet6 fe80::d823:43ff:fe1e:248f  prefixlen 64  scopeid 0x20<link>
+        ether da:23:43:1e:24:8f  txqueuelen 0  (Ethernet)
+        RX packets 0  bytes 0 (0.0 B)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 87  bytes 10199 (10.1 KB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+vethd96e9cb: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet6 fe80::f41f:3bff:fe67:6305  prefixlen 64  scopeid 0x20<link>
+        ether f6:1f:3b:67:63:05  txqueuelen 0  (Ethernet)
+        RX packets 0  bytes 0 (0.0 B)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 86  bytes 10129 (10.1 KB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+wlan0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 192.168.88.50  netmask 255.255.255.0  broadcast 192.168.88.255
+        inet6 fe80::7a13:20db:ee55:7547  prefixlen 64  scopeid 0x20<link>
+        ether 90:e8:68:84:07:41  txqueuelen 1000  (Ethernet)
+        RX packets 610  bytes 90622 (90.6 KB)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 67  bytes 9653 (9.6 KB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+sdv-orin@ubuntu:~/working/dreamKIT$ ping 192.168.56.49
+PING 192.168.56.49 (192.168.56.49) 56(84) bytes of data.
+64 bytes from 192.168.56.49: icmp_seq=1 ttl=64 time=1.06 ms
+^C
+--- 192.168.56.49 ping statistics ---
+1 packets transmitted, 1 received, 0% packet loss, time 0ms
+rtt min/avg/max/mdev = 1.059/1.059/1.059/0.000 ms
+sdv-orin@ubuntu:~/working/dreamKIT$ kubectl get all -o wide
+NAME                                            READY   STATUS                 RESTARTS             AGE    IP              NODE   NOMINATED NODE   READINESS GATES
+pod/6878e120946463a9a7d6d541-857799c777-ct2vp   0/1     CreateContainerError   90 (<invalid> ago)   159m   192.168.56.49   vip    <none>           <none>
+pod/6890a3afe4bb77b728f898be-7d5bf4dd4c-pdtj5   0/1     CreateContainerError   15 (<invalid> ago)   158m   192.168.56.49   vip    <none>           <none>
+pod/dk-ivi-85d85c8bb5-z77lk                     1/1     Running                1 (20m ago)          10m    192.168.56.48   xip    <none>           <none>
+pod/dk-manager-554c4bb4c-szsr9                  1/1     Running                2 (20m ago)          13m    192.168.56.48   xip    <none>           <none>
+pod/mirror-k3s-rancher-mirrored-pause-xhxzq     0/1     Completed              0                    13m    192.168.56.48   xip    <none>           <none>
+pod/sdv-runtime-7b65bf8656-46nlb                2/2     Running                2 (20m ago)          12m    192.168.56.48   xip    <none>           <none>
+
+NAME                 TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE    SELECTOR
+service/kubernetes   ClusterIP   10.43.0.1    <none>        443/TCP   5d5h   <none>
+
+NAME                                       READY   UP-TO-DATE   AVAILABLE   AGE    CONTAINERS                 IMAGES                                                                                  SELECTOR
+deployment.apps/6878e120946463a9a7d6d541   0/1     1            0           172m   6878e120946463a9a7d6d541   ghcr.io/ync1hc/dk_service_can_provider:latest                                           app=6878e120946463a9a7d6d541
+deployment.apps/6890a3afe4bb77b728f898be   0/1     1            0           171m   6890a3afe4bb77b728f898be   ghcr.io/samtranbosch/dk_service_can_provider:latest                                     app=6890a3afe4bb77b728f898be
+deployment.apps/dk-ivi                     1/1     1            1           13m    dk-ivi                     ghcr.io/samtranbosch/dk_ivi:latest                                                      app=dk-ivi
+deployment.apps/dk-manager                 1/1     1            1           13m    dk-manager                 ghcr.io/eclipse-autowrx/dk_manager:latest                                               app=dk-manager
+deployment.apps/sdv-runtime                1/1     1            1           13m    sdv-runtime,vss-sync       ghcr.io/eclipse-autowrx/sdv-runtime:latest,ghcr.io/eclipse-autowrx/sdv-runtime:latest   app=sdv-runtime
+
+NAME                                                  DESIRED   CURRENT   READY   AGE    CONTAINERS                 IMAGES                                                                                  SELECTOR
+replicaset.apps/6878e120946463a9a7d6d541-857799c777   1         1         0       172m   6878e120946463a9a7d6d541   ghcr.io/ync1hc/dk_service_can_provider:latest                                           app=6878e120946463a9a7d6d541,pod-template-hash=857799c777
+replicaset.apps/6890a3afe4bb77b728f898be-7d5bf4dd4c   1         1         0       171m   6890a3afe4bb77b728f898be   ghcr.io/samtranbosch/dk_service_can_provider:latest                                     app=6890a3afe4bb77b728f898be,pod-template-hash=7d5bf4dd4c
+replicaset.apps/dk-ivi-85d85c8bb5                     1         1         1       13m    dk-ivi                     ghcr.io/samtranbosch/dk_ivi:latest                                                      app=dk-ivi,pod-template-hash=85d85c8bb5
+replicaset.apps/dk-manager-554c4bb4c                  1         1         1       13m    dk-manager                 ghcr.io/eclipse-autowrx/dk_manager:latest                                               app=dk-manager,pod-template-hash=554c4bb4c
+replicaset.apps/sdv-runtime-7b65bf8656                1         1         1       13m    sdv-runtime,vss-sync       ghcr.io/eclipse-autowrx/sdv-runtime:latest,ghcr.io/eclipse-autowrx/sdv-runtime:latest   app=sdv-runtime,pod-template-hash=7b65bf8656
+
+NAME                                          STATUS     COMPLETIONS   DURATION   AGE    CONTAINERS                          IMAGES                             SELECTOR
+job.batch/mirror-6895959ae4bb77b728f89f5f     Failed     0/1           151m       151m   mirror                              quay.io/containers/skopeo:latest   batch.kubernetes.io/controller-uid=6b80ac07-f09e-484c-a293-2671a0c035c8
+job.batch/mirror-k3s-rancher-mirrored-pause   Complete   1/1           17s        13m    mirror-k3s-rancher-mirrored-pause   quay.io/containers/skopeo:latest   batch.kubernetes.io/controller-uid=1dc44d46-d8ce-40e4-8ff2-7cd3f422247c
+sdv-orin@ubuntu:~/working/dreamKIT$ kubectl describe pod/dk-ivi-85d85c8bb5-z77lk
+Name:             dk-ivi-85d85c8bb5-z77lk
+Namespace:        default
+Priority:         0
+Service Account:  dk-ivi-service-account
+Node:             xip/192.168.56.48
+Start Time:       Wed, 13 Aug 2025 19:55:37 +0700
+Labels:           app=dk-ivi
+                  pod-template-hash=85d85c8bb5
+Annotations:      <none>
+Status:           Running
+IP:               192.168.56.48
+IPs:
+  IP:           192.168.56.48
+Controlled By:  ReplicaSet/dk-ivi-85d85c8bb5
+Init Containers:
+  wait-for-sdv-runtime:
+    Container ID:  containerd://2f9b028299028e0619ac5cc0f5f2da934517f3314473d03cef2567dd9614d2e1
+    Image:         alpine:latest
+    Image ID:      docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      sh
+      -c
+      echo "Waiting 10 seconds for sdv-runtime..."; sleep 10; echo "Ready to start dk-ivi"
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Wed, 13 Aug 2025 19:56:20 +0700
+      Finished:     Wed, 13 Aug 2025 19:56:30 +0700
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     25m
+      memory:  32Mi
+    Requests:
+      cpu:        10m
+      memory:     16Mi
+    Environment:  <none>
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-4zd8t (ro)
+Containers:
+  dk-ivi:
+    Container ID:   containerd://52cc7066e32ee21ce573feaed497156344c70f4fca99dc16bff557757e56b864
+    Image:          ghcr.io/samtranbosch/dk_ivi:latest
+    Image ID:       ghcr.io/samtranbosch/dk_ivi@sha256:7a723d9578d6fe18277835027ed8d08b395858d47ce2e76a515805bd51b08162
+    Port:           <none>
+    Host Port:      <none>
+    State:          Running
+      Started:      Wed, 13 Aug 2025 19:56:31 +0700
+    Last State:     Terminated
+      Reason:       Unknown
+      Exit Code:    255
+      Started:      Wed, 13 Aug 2025 19:55:49 +0700
+      Finished:     Wed, 13 Aug 2025 19:46:11 +0700
+    Ready:          True
+    Restart Count:  1
+    Environment:
+      DISPLAY:                  :0
+      XDG_RUNTIME_DIR:          /run/user/1000
+      QT_QUICK_BACKEND:         software
+      DKCODE:                   dreamKIT
+      DK_USER:                  sdv-orin
+      DK_VIP:                   
+      DK_DOCKER_HUB_NAMESPACE:  ghcr.io/samtranbosch
+      DK_ARCH:                  arm64
+      DK_CONTAINER_ROOT:        /app/.dk/
+      KUBECONFIG:               /root/.kube/config
+    Mounts:
+      /app/.dk from dk-home (rw)
+      /root/.kube/config from kube-config (ro)
+      /tmp/.X11-unix from x11-unix (rw)
+      /usr/bin/docker from docker-binary (ro)
+      /usr/local/bin/kubectl from kubectl-binary (ro)
+      /var/run/docker.sock from docker-sock (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-4zd8t (ro)
+Conditions:
+  Type                        Status
+  PodReadyToStartContainers   True 
+  Initialized                 True 
+  Ready                       True 
+  ContainersReady             True 
+  PodScheduled                True 
+Volumes:
+  dk-home:
+    Type:          HostPath (bare host directory volume)
+    Path:          /home/sdv-orin/.dk
+    HostPathType:  DirectoryOrCreate
+  x11-unix:
+    Type:          HostPath (bare host directory volume)
+    Path:          /tmp/.X11-unix
+    HostPathType:  Directory
+  kubectl-binary:
+    Type:          HostPath (bare host directory volume)
+    Path:          /usr/local/bin/kubectl
+    HostPathType:  File
+  kube-config:
+    Type:          HostPath (bare host directory volume)
+    Path:          /home/sdv-orin/.kube/config
+    HostPathType:  File
+  docker-sock:
+    Type:          HostPath (bare host directory volume)
+    Path:          /var/run/docker.sock
+    HostPathType:  Socket
+  docker-binary:
+    Type:          HostPath (bare host directory volume)
+    Path:          /usr/bin/docker
+    HostPathType:  File
+  kube-api-access-4zd8t:
+    Type:                    Projected (a volume that contains injected data from multiple sources)
+    TokenExpirationSeconds:  3607
+    ConfigMapName:           kube-root-ca.crt
+    Optional:                false
+    DownwardAPI:             true
+QoS Class:                   Burstable
+Node-Selectors:              kubernetes.io/hostname=xip
+Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+                             node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
+Events:
+  Type     Reason                  Age                 From               Message
+  ----     ------                  ----                ----               -------
+  Normal   Scheduled               11m                 default-scheduler  Successfully assigned default/dk-ivi-85d85c8bb5-z77lk to xip
+  Warning  FailedCreatePodSandBox  20m (x6 over 20m)   kubelet            Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "dk-ivi-85d85c8bb5-z77lk_default_a154293b-aee0-4ecc-9ffd-aa6fffd958d9_1": name "dk-ivi-85d85c8bb5-z77lk_default_a154293b-aee0-4ecc-9ffd-aa6fffd958d9_1" is reserved for "ad87cc51a40a373d8438709e16ca0dbdb86276cfbce97e625c6cbfaf296c6d2a"
+  Normal   Started                 19m (x2 over 20m)   kubelet            Started container wait-for-sdv-runtime
+  Normal   Killing                 19m (x2 over 20m)   kubelet            Stopping container wait-for-sdv-runtime
+  Warning  FailedCreatePodSandBox  18m (x6 over 19m)   kubelet            Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "dk-ivi-85d85c8bb5-z77lk_default_a154293b-aee0-4ecc-9ffd-aa6fffd958d9_1": name "dk-ivi-85d85c8bb5-z77lk_default_a154293b-aee0-4ecc-9ffd-aa6fffd958d9_1" is reserved for "78a8ba54edcdd0e22926a547d77966f911df857d3e6502f9e6c624202d73435f"
+  Normal   Pulled                  18m (x3 over 20m)   kubelet            Container image "alpine:latest" already present on machine
+  Normal   Created                 18m (x3 over 20m)   kubelet            Created container: wait-for-sdv-runtime
+  Warning  FailedCreatePodSandBox  18m (x5 over 18m)   kubelet            Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "dk-ivi-85d85c8bb5-z77lk_default_a154293b-aee0-4ecc-9ffd-aa6fffd958d9_1": name "dk-ivi-85d85c8bb5-z77lk_default_a154293b-aee0-4ecc-9ffd-aa6fffd958d9_1" is reserved for "a164dfbe8e47d4fd78616e8c669f1c895d18f818c5ef499c8cea2bce99a2e3ce"
+  Warning  FailedCreatePodSandBox  17m (x6 over 17m)   kubelet            Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "dk-ivi-85d85c8bb5-z77lk_default_a154293b-aee0-4ecc-9ffd-aa6fffd958d9_1": name "dk-ivi-85d85c8bb5-z77lk_default_a154293b-aee0-4ecc-9ffd-aa6fffd958d9_1" is reserved for "5997d2eaac1f3b34decba27848cdc2ad32102fb9f5a2c29d8b7b93b6f6473979"
+  Warning  FailedCreatePodSandBox  16m (x2 over 16m)   kubelet            Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "dk-ivi-85d85c8bb5-z77lk_default_a154293b-aee0-4ecc-9ffd-aa6fffd958d9_1": name "dk-ivi-85d85c8bb5-z77lk_default_a154293b-aee0-4ecc-9ffd-aa6fffd958d9_1" is reserved for "e4428c5f5f14f3cdb4b9e2727ee6b0e23c1bee950ceb017b61f08c0578207add"
+  Warning  FailedCreatePodSandBox  15m                 kubelet            Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "dk-ivi-85d85c8bb5-z77lk_default_a154293b-aee0-4ecc-9ffd-aa6fffd958d9_1": name "dk-ivi-85d85c8bb5-z77lk_default_a154293b-aee0-4ecc-9ffd-aa6fffd958d9_1" is reserved for "6bff63e817fd9783fff26d6a82b7a01c31a6bcd2e76490a08f9bfe61827943fd"
+  Normal   Pulled                  11m                 kubelet            Container image "alpine:latest" already present on machine
+  Normal   Created                 11m                 kubelet            Created container: wait-for-sdv-runtime
+  Normal   Started                 11m                 kubelet            Started container wait-for-sdv-runtime
+  Normal   Pulled                  11m                 kubelet            Container image "ghcr.io/samtranbosch/dk_ivi:latest" already present on machine
+  Normal   Created                 11m                 kubelet            Created container: dk-ivi
+  Normal   Started                 11m                 kubelet            Started container dk-ivi
+  Normal   SandboxChanged          10m (x67 over 20m)  kubelet            Pod sandbox changed, it will be killed and re-created.
+sdv-orin@ubuntu:~/working/dreamKIT$ kubectl describe pod/sdv-runtime-7b65bf8656-46nlb
+Name:             sdv-runtime-7b65bf8656-46nlb
+Namespace:        default
+Priority:         0
+Service Account:  default
+Node:             xip/192.168.56.48
+Start Time:       Wed, 13 Aug 2025 19:54:02 +0700
+Labels:           app=sdv-runtime
+                  pod-template-hash=7b65bf8656
+Annotations:      <none>
+Status:           Running
+IP:               192.168.56.48
+IPs:
+  IP:           192.168.56.48
+Controlled By:  ReplicaSet/sdv-runtime-7b65bf8656
+Init Containers:
+  setup-vss:
+    Container ID:  containerd://0056bfdb3047dc5ee55b9161f48cdaeb795315c1a104a0a40478773fb79ccee0
+    Image:         ghcr.io/eclipse-autowrx/sdv-runtime:latest
+    Image ID:      ghcr.io/eclipse-autowrx/sdv-runtime@sha256:9079507676685205ff636e29cc5b5298d226d05309009d700ef4b9c7c497d2b0
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      /bin/sh
+    Args:
+      -c
+      echo "Initializing VSS file (offline mode)..."
+      mkdir -p /persistent
+      mkdir -p /shared
+      
+      # Load from persistent storage or create default
+      if [ -f /persistent/vss.json ]; then
+        echo "Loading existing VSS file from persistent storage"
+        cp /persistent/vss.json /shared/vss.json
+      fi
+      
+      chmod 666 /shared/vss.json
+      echo "VSS initialization complete (offline)"
+      
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Wed, 13 Aug 2025 19:54:26 +0700
+      Finished:     Wed, 13 Aug 2025 19:54:26 +0700
+    Ready:          True
+    Restart Count:  0
+    Environment:    <none>
+    Mounts:
+      /persistent from persistent-storage (rw)
+      /shared from shared-vss (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-qj9dh (ro)
+Containers:
+  sdv-runtime:
+    Container ID:   containerd://8e2cf27e403a290ffeafacd56454188bdc181a435b300a4eda68b718cc8c356f
+    Image:          ghcr.io/eclipse-autowrx/sdv-runtime:latest
+    Image ID:       ghcr.io/eclipse-autowrx/sdv-runtime@sha256:9079507676685205ff636e29cc5b5298d226d05309009d700ef4b9c7c497d2b0
+    Port:           55555/TCP
+    Host Port:      55555/TCP
+    State:          Running
+      Started:      Wed, 13 Aug 2025 19:54:27 +0700
+    Last State:     Terminated
+      Reason:       Unknown
+      Exit Code:    255
+      Started:      Wed, 13 Aug 2025 19:54:03 +0700
+      Finished:     Wed, 13 Aug 2025 19:46:11 +0700
+    Ready:          True
+    Restart Count:  1
+    Environment:
+      USER:          sdv-orin
+      RUNTIME_NAME:  dreamKIT-22090f65
+      ARCH:          arm64
+      OFFLINE_MODE:  true
+    Mounts:
+      /home/dev/ws/vss.json from shared-vss (rw,path="vss.json")
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-qj9dh (ro)
+  vss-sync:
+    Container ID:  containerd://36036a18054ca21ffc43fb9bc2db3a764d69ba8a6fb4661ff64ccbe273d578ad
+    Image:         ghcr.io/eclipse-autowrx/sdv-runtime:latest
+    Image ID:      ghcr.io/eclipse-autowrx/sdv-runtime@sha256:9079507676685205ff636e29cc5b5298d226d05309009d700ef4b9c7c497d2b0
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      /bin/sh
+    Args:
+      -c
+      echo "Starting VSS sync service (offline mode)..."
+      
+      sync_file() {
+        if [ -f /shared/vss.json ]; then
+          # Simple file comparison without external tools
+          if ! cmp -s /shared/vss.json /persistent/vss.json 2>/dev/null; then
+            echo "$(date): VSS file changed, syncing to persistent storage"
+            cp /shared/vss.json /persistent/vss.json
+            sync  # Force filesystem sync
+            echo "$(date): Sync completed"
+          fi
+        fi
+      }
+      
+      # Initial sync
+      sync_file
+      
+      # Continuous monitoring with longer intervals for offline efficiency
+      while true; do
+        sync_file
+        sleep 10  # Check every 10 seconds (adjust as needed)
+      done
+      
+    State:          Running
+      Started:      Wed, 13 Aug 2025 19:54:27 +0700
+    Last State:     Terminated
+      Reason:       Unknown
+      Exit Code:    255
+      Started:      Wed, 13 Aug 2025 19:54:03 +0700
+      Finished:     Wed, 13 Aug 2025 19:46:11 +0700
+    Ready:          True
+    Restart Count:  1
+    Limits:
+      cpu:     50m
+      memory:  32Mi
+    Requests:
+      cpu:        10m
+      memory:     16Mi
+    Environment:  <none>
+    Mounts:
+      /persistent from persistent-storage (rw)
+      /shared from shared-vss (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-qj9dh (ro)
+Conditions:
+  Type                        Status
+  PodReadyToStartContainers   True 
+  Initialized                 True 
+  Ready                       True 
+  ContainersReady             True 
+  PodScheduled                True 
+Volumes:
+  persistent-storage:
+    Type:          HostPath (bare host directory volume)
+    Path:          /home/sdv-orin/.dk/sdv-runtime
+    HostPathType:  DirectoryOrCreate
+  shared-vss:
+    Type:       EmptyDir (a temporary directory that shares a pod's lifetime)
+    Medium:     
+    SizeLimit:  <unset>
+  kube-api-access-qj9dh:
+    Type:                    Projected (a volume that contains injected data from multiple sources)
+    TokenExpirationSeconds:  3607
+    ConfigMapName:           kube-root-ca.crt
+    Optional:                false
+    DownwardAPI:             true
+QoS Class:                   Burstable
+Node-Selectors:              kubernetes.io/hostname=xip
+Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+                             node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
+Events:
+  Type     Reason                  Age                 From               Message
+  ----     ------                  ----                ----               -------
+  Normal   Scheduled               15m                 default-scheduler  Successfully assigned default/sdv-runtime-7b65bf8656-46nlb to xip
+  Warning  FailedScheduling        16m                 default-scheduler  0/2 nodes are available: 1 node(s) didn't have free ports for the requested pod ports, 1 node(s) didn't match Pod's node affinity/selector. preemption: 0/2 nodes are available: 1 No preemption victims found for incoming pod, 1 Preemption is not helpful for scheduling.
+  Warning  FailedCreatePodSandBox  22m (x6 over 23m)   kubelet            Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "sdv-runtime-7b65bf8656-46nlb_default_2e98741e-ac69-4f7f-af85-0691c4e7055d_1": name "sdv-runtime-7b65bf8656-46nlb_default_2e98741e-ac69-4f7f-af85-0691c4e7055d_1" is reserved for "00444e934af3bcbd58d045c3b48935997f5a7befff9f2bafc39f02bb0d112425"
+  Normal   Killing                 22m                 kubelet            Stopping container setup-vss
+  Warning  FailedCreatePodSandBox  21m (x5 over 22m)   kubelet            Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "sdv-runtime-7b65bf8656-46nlb_default_2e98741e-ac69-4f7f-af85-0691c4e7055d_1": name "sdv-runtime-7b65bf8656-46nlb_default_2e98741e-ac69-4f7f-af85-0691c4e7055d_1" is reserved for "390d3f0b510b02756da0dd9562b1b7bdff4d633a1b81f5f985275a59a4cad73f"
+  Normal   Pulled                  21m (x3 over 23m)   kubelet            Container image "ghcr.io/eclipse-autowrx/sdv-runtime:latest" already present on machine
+  Normal   Created                 21m (x3 over 23m)   kubelet            Created container: setup-vss
+  Normal   Started                 21m (x3 over 23m)   kubelet            Started container setup-vss
+  Warning  FailedCreatePodSandBox  20m (x5 over 21m)   kubelet            Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "sdv-runtime-7b65bf8656-46nlb_default_2e98741e-ac69-4f7f-af85-0691c4e7055d_1": name "sdv-runtime-7b65bf8656-46nlb_default_2e98741e-ac69-4f7f-af85-0691c4e7055d_1" is reserved for "06f830ababb526125fdfdaf341e30da8c8912d4982901a0ab7892609b990e619"
+  Warning  FailedCreatePodSandBox  19m (x6 over 20m)   kubelet            Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "sdv-runtime-7b65bf8656-46nlb_default_2e98741e-ac69-4f7f-af85-0691c4e7055d_1": name "sdv-runtime-7b65bf8656-46nlb_default_2e98741e-ac69-4f7f-af85-0691c4e7055d_1" is reserved for "3b2a4469fe2c6014e9c6041921b03087e37f6a3a0e89fdeefd778a8942c7c566"
+  Warning  FailedCreatePodSandBox  18m (x3 over 19m)   kubelet            Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "sdv-runtime-7b65bf8656-46nlb_default_2e98741e-ac69-4f7f-af85-0691c4e7055d_1": name "sdv-runtime-7b65bf8656-46nlb_default_2e98741e-ac69-4f7f-af85-0691c4e7055d_1" is reserved for "328bc4c2b64e9047d74696c1932d41169f0a1c3351dd4887e1e07749428cdd0d"
+  Normal   SandboxChanged          18m (x34 over 23m)  kubelet            Pod sandbox changed, it will be killed and re-created.
+  Warning  FailedCreatePodSandBox  18m                 kubelet            Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "sdv-runtime-7b65bf8656-46nlb_default_2e98741e-ac69-4f7f-af85-0691c4e7055d_1": name "sdv-runtime-7b65bf8656-46nlb_default_2e98741e-ac69-4f7f-af85-0691c4e7055d_1" is reserved for "a6e992fa4c44ae15340ef8dc054992839578edf75bcbf9f7f2872acf8a33adf7"
+  Normal   Pulled                  15m                 kubelet            Container image "ghcr.io/eclipse-autowrx/sdv-runtime:latest" already present on machine
+  Normal   Created                 15m                 kubelet            Created container: setup-vss
+  Normal   Started                 15m                 kubelet            Started container setup-vss
+  Normal   Pulled                  15m                 kubelet            Container image "ghcr.io/eclipse-autowrx/sdv-runtime:latest" already present on machine
+  Normal   Created                 15m                 kubelet            Created container: sdv-runtime
+  Normal   Started                 15m                 kubelet            Started container sdv-runtime
+  Normal   Pulled                  15m                 kubelet            Container image "ghcr.io/eclipse-autowrx/sdv-runtime:latest" already present on machine
+  Normal   Created                 15m                 kubelet            Created container: vss-sync
+  Normal   Started                 15m                 kubelet            Started container vss-sync
+sdv-orin@ubuntu:~/working/dreamKIT$ ping google.com
+^C
+sdv-orin@ubuntu:~/working/dreamKIT$ kubectl describe pod/6878e120946463a9a7d6d541-857799c777-ct2vp
+Name:             6878e120946463a9a7d6d541-857799c777-ct2vp
+Namespace:        default
+Priority:         0
+Service Account:  default
+Node:             vip/192.168.56.49
+Start Time:       Wed, 10 Sep 2025 01:12:27 +0700
+Labels:           app=6878e120946463a9a7d6d541
+                  pod-template-hash=857799c777
+Annotations:      <none>
+Status:           Running
+IP:               192.168.56.49
+IPs:
+  IP:           192.168.56.49
+Controlled By:  ReplicaSet/6878e120946463a9a7d6d541-857799c777
+Containers:
+  6878e120946463a9a7d6d541:
+    Container ID:   containerd://e492d625094379a2394bacab4407516dcd7e582b08f53e9bd8d679521f35bce1
+    Image:          ghcr.io/ync1hc/dk_service_can_provider:latest
+    Image ID:       ghcr.io/ync1hc/dk_service_can_provider@sha256:2e06448be7958d89cb4750198340a9236a438ecdae402cf31195aab3bbd53313
+    Port:           <none>
+    Host Port:      <none>
+    State:          Waiting
+      Reason:       CreateContainerError
+    Last State:     Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Wed, 10 Sep 2025 03:39:26 +0700
+      Finished:     Wed, 10 Sep 2025 03:39:33 +0700
+    Ready:          False
+    Restart Count:  90
+    Environment:
+      CAN_PORT:       can0
+      KUKSA_ADDRESS:  192.168.56.48
+      MAPPING_FILE:   mapping/vss_4.0/vss_dbc.json
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-98gsj (ro)
+Conditions:
+  Type              Status
+  Initialized       True 
+  Ready             False 
+  ContainersReady   False 
+  PodScheduled      True 
+Volumes:
+  kube-api-access-98gsj:
+    Type:                    Projected (a volume that contains injected data from multiple sources)
+    TokenExpirationSeconds:  3607
+    ConfigMapName:           kube-root-ca.crt
+    Optional:                false
+    DownwardAPI:             true
+QoS Class:                   BestEffort
+Node-Selectors:              kubernetes.io/hostname=vip
+Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+                             node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
+Events:
+  Type     Reason                  Age                             From     Message
+  ----     ------                  ----                            ----     -------
+  Warning  FailedCreatePodSandBox  <invalid> (x6 over <invalid>)   kubelet  Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_1": name "6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_1" is reserved for "d7d48a2c30cc35ec3162116847eb27504125a5950894593cc2de5a41f37fe023"
+  Warning  FailedCreatePodSandBox  <invalid> (x6 over <invalid>)   kubelet  Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_1": name "6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_1" is reserved for "5512acc9281970f6b5f13387468a32b4648aea49d7a518d60202c523d92f690f"
+  Normal   Created                 <invalid> (x2 over <invalid>)   kubelet  Created container 6878e120946463a9a7d6d541
+  Normal   Started                 <invalid> (x2 over <invalid>)   kubelet  Started container 6878e120946463a9a7d6d541
+  Normal   Killing                 <invalid> (x2 over <invalid>)   kubelet  Stopping container 6878e120946463a9a7d6d541
+  Normal   Pulled                  <invalid> (x2 over <invalid>)   kubelet  Container image "ghcr.io/ync1hc/dk_service_can_provider:latest" already present on machine
+  Normal   Created                 <invalid> (x2 over <invalid>)   kubelet  Created container 6878e120946463a9a7d6d541
+  Normal   Started                 <invalid> (x2 over <invalid>)   kubelet  Started container 6878e120946463a9a7d6d541
+  Normal   Killing                 <invalid> (x2 over <invalid>)   kubelet  Stopping container 6878e120946463a9a7d6d541
+  Normal   Pulled                  <invalid> (x2 over <invalid>)   kubelet  Container image "ghcr.io/ync1hc/dk_service_can_provider:latest" already present on machine
+  Warning  FailedCreatePodSandBox  <invalid>                       kubelet  Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_1": name "6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_1" is reserved for "ca7b373a31ce9a154bfb9fde42cf9c1a76f20f764debf54c3c7cc801f4a70754"
+  Warning  FailedCreatePodSandBox  <invalid>                       kubelet  Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_1": name "6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_1" is reserved for "0e32f6b5f30adcdbf1650d6dee7a5abc599179ea1a9626cefca3c15e2c07b95e"
+  Normal   SandboxChanged          <invalid> (x33 over <invalid>)  kubelet  Pod sandbox changed, it will be killed and re-created.
+  Normal   SandboxChanged          <invalid> (x35 over <invalid>)  kubelet  Pod sandbox changed, it will be killed and re-created.
+  Warning  FailedCreatePodSandBox  <invalid> (x6 over <invalid>)   kubelet  Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_1": name "6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_1" is reserved for "6d3a4dd624006bd4cf30beb34d36b1b348ea9685d0c6b9e4df5759fea235746a"
+  Normal   Created                 <invalid> (x2 over <invalid>)   kubelet  Created container 6878e120946463a9a7d6d541
+  Normal   Started                 <invalid> (x2 over <invalid>)   kubelet  Started container 6878e120946463a9a7d6d541
+  Normal   Killing                 <invalid> (x2 over <invalid>)   kubelet  Stopping container 6878e120946463a9a7d6d541
+  Normal   SandboxChanged          <invalid> (x10 over <invalid>)  kubelet  Pod sandbox changed, it will be killed and re-created.
+  Warning  FailedCreatePodSandBox  <invalid>                       kubelet  Failed to create pod sandbox: rpc error: code = Unknown desc = failed to reserve sandbox name "6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_1": name "6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_1" is reserved for "bc53d5fff52b58c1dc8c4822957433d9e9559733c5886cd1128eddc1985abf40"
+  Normal   Pulled                  <invalid> (x28 over <invalid>)  kubelet  Container image "ghcr.io/ync1hc/dk_service_can_provider:latest" already present on machine
+  Warning  Failed                  <invalid> (x2 over <invalid>)   kubelet  Error: failed to reserve container name "6878e120946463a9a7d6d541_6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_91": name "6878e120946463a9a7d6d541_6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_91" is reserved for "520008a635ee4d1415a0b6f36ae27a692a8d351e7bd8f03259598143102e9519"
+  Warning  Failed                  <invalid> (x2 over <invalid>)   kubelet  Error: failed to reserve container name "6878e120946463a9a7d6d541_6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_91": name "6878e120946463a9a7d6d541_6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_91" is reserved for "620bfd321f989c269595cc88e9ecadef7584a97a845ca8a8208225bbf0849460"
+  Warning  Failed                  <invalid> (x2 over <invalid>)   kubelet  Error: failed to reserve container name "6878e120946463a9a7d6d541_6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_91": name "6878e120946463a9a7d6d541_6878e120946463a9a7d6d541-857799c777-ct2vp_default_fb3a2c2b-c59e-4f29-930d-391f2f4e180a_91" is reserved for "a5c578155378c703c51685bbcb5f2b6df79d861ffce6e151fe347a5f0f23b151"
+  Normal   Started                 <invalid> (x4 over <invalid>)   kubelet  Started container 6878e120946463a9a7d6d541
+  Normal   Created                 <invalid> (x4 over <invalid>)   kubelet  Created container 6878e120946463a9a7d6d541
+  Normal   Pulled                  <invalid> (x11 over <invalid>)  kubelet  Container image "ghcr.io/ync1hc/dk_service_can_provider:latest" already present on machine
+  Normal   Pulled                  <invalid> (x4 over <invalid>)   kubelet  Container image "ghcr.io/ync1hc/dk_service_can_provider:latest" already present on machine
+  Normal   Started                 <invalid> (x4 over <invalid>)   kubelet  Started container 6878e120946463a9a7d6d541
+  Normal   Created                 <invalid> (x4 over <invalid>)   kubelet  Created container 6878e120946463a9a7d6d541
+  Warning  BackOff                 <invalid> (x21 over <invalid>)  kubelet  Back-off restarting failed container
+  Normal   Created                 <invalid> (x4 over <invalid>)   kubelet  Created container 6878e120946463a9a7d6d541
+  Normal   Started                 <invalid> (x4 over <invalid>)   kubelet  Started container 6878e120946463a9a7d6d541
+  Normal   Pulled                  <invalid> (x5 over <invalid>)   kubelet  Container image "ghcr.io/ync1hc/dk_service_can_provider:latest" already present on machine
+  Warning  BackOff                 <invalid> (x20 over <invalid>)  kubelet  Back-off restarting failed container
+  Normal   Pulled                  <invalid> (x4 over <invalid>)   kubelet  Container image "ghcr.io/ync1hc/dk_service_can_provider:latest" already present on machine
+  Normal   Started                 <invalid> (x4 over <invalid>)   kubelet  Started container 6878e120946463a9a7d6d541
+  Normal   Created                 <invalid> (x4 over <invalid>)   kubelet  Created container 6878e120946463a9a7d6d541
+  Warning  BackOff                 <invalid> (x21 over <invalid>)  kubelet  Back-off restarting failed container
+  Normal   Created                 <invalid> (x4 over <invalid>)   kubelet  Created container 6878e120946463a9a7d6d541
+  Normal   Started                 <invalid> (x4 over <invalid>)   kubelet  Started container 6878e120946463a9a7d6d541
+  Normal   Pulled                  <invalid> (x5 over <invalid>)   kubelet  Container image "ghcr.io/ync1hc/dk_service_can_provider:latest" already present on machine
+  Warning  BackOff                 <invalid> (x21 over <invalid>)  kubelet  Back-off restarting failed container
+  Normal   Pulled                  <invalid> (x4 over <invalid>)   kubelet  Container image "ghcr.io/ync1hc/dk_service_can_provider:latest" already present on machine
+  Normal   Created                 <invalid> (x4 over <invalid>)   kubelet  Created container 6878e120946463a9a7d6d541
+  Normal   Started                 <invalid> (x4 over <invalid>)   kubelet  Started container 6878e120946463a9a7d6d541
+  Warning  BackOff                 <invalid> (x21 over <invalid>)  kubelet  Back-off restarting failed container
+  Normal   Pulled                  <invalid> (x4 over <invalid>)   kubelet  Container image "ghcr.io/ync1hc/dk_service_can_provider:latest" already present on machine
+  Normal   Created                 <invalid> (x4 over <invalid>)   kubelet  Created container 6878e120946463a9a7d6d541
+  Normal   Started                 <invalid> (x4 over <invalid>)   kubelet  Started container 6878e120946463a9a7d6d541
+  Warning  BackOff                 <invalid> (x22 over <invalid>)  kubelet  Back-off restarting failed container
