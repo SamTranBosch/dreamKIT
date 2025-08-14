@@ -1,0 +1,16 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dk-ivi-pull
+spec:
+  template:
+    spec:
+      hostNetwork: true
+      nodeSelector:
+        kubernetes.io/hostname: xip
+      restartPolicy: Never
+      containers:
+      - name: dk-ivi-pull
+        image: ghcr.io/samtranbosch/dk_ivi:latest
+        imagePullPolicy: Always
+        command: ["true"]
