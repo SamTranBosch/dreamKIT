@@ -1,0 +1,215 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: 6878e120946463a9a7d6d541
+  namespace: default
+  # Add annotation to force new pod creation
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    deployment.kubernetes.io/cleanup-required: "true"
+spec:
+  replicas: 1
+  # Enhanced strategy to prevent sandbox conflicts
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  selector:
+    matchLabels:
+      app: 6878e120946463a9a7d6d541
+  template:
+    metadata:
+      labels:
+        app: 6878e120946463a9a7d6d541
+      # Add unique annotation to force pod recreation
+      annotations:
+        restart-timestamp: "{{ .Values.timestamp | default now }}"
+        pod.kubernetes.io/sandbox-cleanup: "force"
+        container.kubernetes.io/name-cleanup: "force"
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: vip
+      hostNetwork: true
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 120  # Extended for thorough cleanup
+      
+      # Enhanced tolerations for worker node issues
+      tolerations:
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 600  # Extended for worker node
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 600
+      - key: "node.kubernetes.io/network-unavailable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 600
+      - key: "node.kubernetes.io/disk-pressure"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 600
+      - key: "node.kubernetes.io/memory-pressure"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 600
+      
+      # Enhanced init container for aggressive cleanup and stability
+      initContainers:
+      - name: can-service-cleanup-init
+        image: ghcr.io/ync1hc/dk_service_can_provider:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          set -e
+          echo "Starting aggressive cleanup and CAN service initialization..."
+          
+          # Extended delay to prevent rapid restart loops and allow thorough cleanup
+          echo "Waiting for extended system stabilization (worker node)..."
+          sleep 60
+          
+          echo "Checking worker node connectivity..."
+          # Check connectivity to master node
+          if command -v ping >/dev/null 2>&1; then
+            echo "Testing connectivity to master node..."
+            ping -c 3 -W 5 192.168.56.48 >/dev/null 2>&1 && echo "Master node reachable" || echo "Master node connectivity issues detected"
+          fi
+          
+          echo "Checking CAN interface availability on worker node..."
+          # Check if CAN interface exists (non-blocking)
+          if command -v ip >/dev/null 2>&1; then
+            ip link show $CAN_PORT 2>/dev/null && echo "CAN interface $CAN_PORT found" || echo "CAN interface $CAN_PORT not found, will be created by main container"
+          else
+            echo "ip command not available, skipping CAN interface check"
+          fi
+          
+          echo "Checking KUKSA connectivity from worker node..."
+          # Test KUKSA connectivity with extended timeout
+          if command -v ping >/dev/null 2>&1; then
+            ping -c 3 -W 5 $KUKSA_ADDRESS >/dev/null 2>&1 && echo "KUKSA address $KUKSA_ADDRESS reachable" || echo "KUKSA address $KUKSA_ADDRESS not reachable from worker node"
+          fi
+          
+          echo "Checking mapping file..."
+          echo "Will use mapping file: $MAPPING_FILE"
+          
+          # Additional extended stability check for worker node
+          echo "Performing extended worker node stability check..."
+          sleep 30
+          
+          echo "CAN service cleanup and initialization complete"
+        
+        env:
+        - name: CAN_PORT
+          value: "can0"
+        - name: KUKSA_ADDRESS
+          value: "192.168.56.48"
+        - name: MAPPING_FILE
+          value: "mapping/vss_4.0/vss_dbc.json"
+        
+        # Add resource limits
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+        
+        securityContext:
+          privileged: true
+      
+      containers:
+      - name: 6878e120946463a9a7d6d541
+        image: ghcr.io/ync1hc/dk_service_can_provider:latest
+        imagePullPolicy: IfNotPresent
+        
+        # Enhanced startup probe for worker node with extended timeouts
+        startupProbe:
+          exec:
+            command: ["/bin/sh", "-c", "echo 'CAN service startup check on worker node'"]
+          initialDelaySeconds: 60  # Extended for worker node
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 20  # Allow 5 minutes for worker node startup
+        
+        # Enhanced readiness probe for worker node
+        readinessProbe:
+          exec:
+            command: ["/bin/sh", "-c", "echo 'CAN service ready on worker node'"]
+          initialDelaySeconds: 90
+          periodSeconds: 20
+          timeoutSeconds: 15
+          failureThreshold: 5
+        
+        # Enhanced liveness probe with very generous timeouts for worker node
+        livenessProbe:
+          exec:
+            command: ["/bin/sh", "-c", "echo 'CAN service alive on worker node'"]
+          initialDelaySeconds: 180
+          periodSeconds: 45
+          timeoutSeconds: 20
+          failureThreshold: 10
+        
+        # Enhanced resource limits for worker node
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "300m"
+        
+        env:
+        - name: CAN_PORT
+          value: "can0"
+        - name: KUKSA_ADDRESS
+          value: "192.168.56.48"
+        - name: MAPPING_FILE
+          value: "mapping/vss_4.0/vss_dbc.json"
+        # Add worker node specific environment
+        - name: OFFLINE_MODE
+          value: "true"
+        - name: WORKER_NODE
+          value: "true"
+        - name: NODE_NAME
+          value: "vip"
+        
+        # Keep your original args (empty in this case)
+        args: []
+        
+        securityContext:
+          privileged: true
+        
+        tty: true
+        stdin: true
+        
+        # Enhanced volume mounts for CAN interface access on worker node
+        volumeMounts:
+        - name: dev
+          mountPath: /dev
+        - name: sys-class-net
+          mountPath: /sys/class/net
+          readOnly: true
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+      
+      # Enhanced volumes for worker node CAN interface support
+      volumes:
+      - name: dev
+        hostPath: 
+          path: /dev
+          type: Directory
+      - name: sys-class-net
+        hostPath: 
+          path: /sys/class/net
+          type: Directory
+      - name: proc
+        hostPath: 
+          path: /proc
+          type: Directory

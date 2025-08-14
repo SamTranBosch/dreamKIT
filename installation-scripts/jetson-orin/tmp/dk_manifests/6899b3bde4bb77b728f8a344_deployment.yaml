@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: 6899b3bde4bb77b728f8a344
+  namespace: default
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  selector:
+    matchLabels:
+      app: 6899b3bde4bb77b728f8a344
+  template:
+    metadata:
+      labels:
+        app: 6899b3bde4bb77b728f8a344
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: xip
+      hostNetwork: true
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 60
+      
+      tolerations:
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      
+      containers:
+      - name: 6899b3bde4bb77b728f8a344
+        image: ghcr.io/ync1hc/dk_ivi:latest
+        imagePullPolicy: IfNotPresent
+        
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        
+        env:
+        - name: DISPLAY
+          value: ":0"
+        
+        args: []
+        
+        securityContext:
+          privileged: true
+        
+        tty: true
+        stdin: true
