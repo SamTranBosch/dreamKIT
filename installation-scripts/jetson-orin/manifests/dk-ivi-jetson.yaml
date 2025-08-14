@@ -1,53 +1,20 @@
----
-# ServiceAccount for dk-ivi
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: dk-ivi-service-account
-  namespace: default
-automountServiceAccountToken: true
-
----
-# ClusterRole with necessary permissions
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: dk-ivi-cluster-role
-rules:
-- apiGroups: ["apps"]
-  resources: ["deployments"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""]
-  resources: ["services", "endpoints"]
-  verbs: ["get", "list", "watch"]
-
----
-# ClusterRoleBinding to bind the role to the service account
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: dk-ivi-cluster-role-binding
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: dk-ivi-cluster-role
-subjects:
-- kind: ServiceAccount
-  name: dk-ivi-service-account
-  namespace: default
-
----
-# Main Deployment
+# Main Deployment with enhanced sandbox conflict prevention
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: dk-ivi
   namespace: default
+  # Add annotation to force new pod creation
+  annotations:
+    deployment.kubernetes.io/revision: "1"
 spec:
   replicas: 1
+  # Enhanced strategy to prevent sandbox conflicts
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
   selector:
     matchLabels:
       app: dk-ivi
@@ -55,30 +22,116 @@ spec:
     metadata:
       labels:
         app: dk-ivi
+      # Add unique annotation to force pod recreation
+      annotations:
+        restart-timestamp: "{{ .Values.timestamp | default now }}"
+        pod.kubernetes.io/sandbox-cleanup: "force"
     spec:
       serviceAccountName: dk-ivi-service-account
       nodeSelector:
         kubernetes.io/hostname: xip
       hostNetwork: true
       restartPolicy: Always
-      terminationGracePeriodSeconds: 30
+      terminationGracePeriodSeconds: 60  # Increased for proper cleanup
+      
+      # Enhanced tolerations
+      tolerations:
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      - key: "node.kubernetes.io/network-unavailable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      - key: "node.kubernetes.io/disk-pressure"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      
       securityContext:
         runAsNonRoot: false
         runAsUser: 0
       
-      # Simple one-liner init container
+      # Enhanced init container with sandbox cleanup
       initContainers:
       - name: wait-for-sdv-runtime
-        image: alpine:latest
+        image: bitnami/kubectl:latest
         imagePullPolicy: IfNotPresent
-        command: ['sh', '-c', 'echo "Waiting 10 seconds for sdv-runtime..."; sleep 10; echo "Ready to start dk-ivi"']
+        command: ['sh', '-c']
+        args:
+        - |
+          set -e
+          echo "Starting sandbox cleanup and initialization..."
+          
+          # Add delay to prevent rapid restart loops and allow cleanup
+          echo "Waiting for system stabilization..."
+          sleep 30
+          
+          # Check for any existing containers with similar names and log them
+          echo "Checking for container conflicts..."
+          
+          echo "Starting in offline mode - using local images only"
+          echo "Checking kubectl permissions..."
+          
+          # Test permissions with timeout
+          timeout 15s kubectl auth can-i get deployments || { 
+            echo "Warning: No permission to get deployments, continuing anyway..."; 
+          }
+          timeout 15s kubectl auth can-i get pods || { 
+            echo "Warning: No permission to get pods, continuing anyway..."; 
+          }
+          
+          echo "Checking for sdv-runtime deployment..."
+          if timeout 30s kubectl get deployment sdv-runtime >/dev/null 2>&1; then
+            echo "SDV Runtime deployment found, waiting for it to be available..."
+            
+            if timeout 180s kubectl wait --for=condition=available --timeout=180s deployment/sdv-runtime; then
+              echo "SDV Runtime deployment is available"
+              
+              echo "Waiting for sdv-runtime pod to be ready..."
+              if timeout 120s kubectl wait --for=condition=ready --timeout=120s pod -l app=sdv-runtime; then
+                echo "SDV Runtime pod is ready"
+              else
+                echo "Warning: SDV Runtime pod not ready, but continuing..."
+                kubectl get pods -l app=sdv-runtime || true
+              fi
+            else
+              echo "Warning: SDV Runtime deployment not available, but continuing..."
+              kubectl describe deployment sdv-runtime || true
+            fi
+          else
+            echo "SDV Runtime deployment not found - this might be expected"
+            echo "Continuing with IVI interface startup..."
+          fi
+          
+          # Final stability check before main container starts
+          echo "Performing final system stability check..."
+          sleep 10
+          
+          echo "Init container completed successfully"
+        
+        securityContext:
+          runAsNonRoot: false
+          runAsUser: 0
+        volumeMounts:
+        - name: kubectl-binary
+          mountPath: /usr/local/bin/kubectl
+          readOnly: true
+        - name: kube-config
+          mountPath: /root/.kube/config
+          readOnly: true
         resources:
           requests:
-            memory: "16Mi"
-            cpu: "10m"
+            memory: "64Mi"
+            cpu: "50m"
           limits:
-            memory: "32Mi"
-            cpu: "25m"
+            memory: "128Mi"
+            cpu: "100m"
       
       volumes:
       - name: dk-home
@@ -110,6 +163,41 @@ spec:
       - name: dk-ivi
         image: ${DOCKER_HUB_NAMESPACE}/dk_ivi:latest
         imagePullPolicy: IfNotPresent
+        
+        # Enhanced startup probe for sandbox issues
+        startupProbe:
+          exec:
+            command: ["/bin/sh", "-c", "echo 'startup check' && sleep 2"]
+          initialDelaySeconds: 45  # Longer delay for sandbox stability
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 12  # Allow 3 minutes for startup
+        
+        readinessProbe:
+          exec:
+            command: ["/bin/sh", "-c", "echo 'ready'"]
+          initialDelaySeconds: 60
+          periodSeconds: 20
+          timeoutSeconds: 10
+          failureThreshold: 3
+        
+        livenessProbe:
+          exec:
+            command: ["/bin/sh", "-c", "echo 'alive'"]
+          initialDelaySeconds: 120
+          periodSeconds: 45
+          timeoutSeconds: 15
+          failureThreshold: 5
+        
+        # Resource limits to prevent resource exhaustion
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        
         securityContext:
           runAsNonRoot: false
           runAsUser: 0

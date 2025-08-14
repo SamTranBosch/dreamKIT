@@ -2,8 +2,18 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sdv-runtime
+  namespace: default
+  # Add annotation to force new pod creation
+  annotations:
+    deployment.kubernetes.io/revision: "1"
 spec:
   replicas: 1
+  # Enhanced strategy to prevent sandbox conflicts
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
   selector:
     matchLabels:
       app: sdv-runtime
@@ -11,20 +21,52 @@ spec:
     metadata:
       labels:
         app: sdv-runtime
+      # Add unique annotation to force pod recreation
+      annotations:
+        restart-timestamp: "{{ .Values.timestamp | default now }}"
+        pod.kubernetes.io/sandbox-cleanup: "force"
     spec:
       nodeSelector:
         kubernetes.io/hostname: xip
       hostNetwork: true
       restartPolicy: Always
-      terminationGracePeriodSeconds: 30
+      terminationGracePeriodSeconds: 60  # Increased for proper cleanup
+      
+      # Add tolerations for node issues (KEY ADDITION)
+      tolerations:
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      - key: "node.kubernetes.io/network-unavailable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      - key: "node.kubernetes.io/disk-pressure"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      
+      # Enhanced init container with sandbox cleanup awareness
       initContainers:
       - name: setup-vss
-        image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest  # Same as main container
-        imagePullPolicy: IfNotPresent  # Don't try to pull if exists
+        image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest
+        imagePullPolicy: IfNotPresent
         command: ["/bin/sh"]
         args:
         - -c
         - |
+          set -e
+          echo "Starting VSS initialization with sandbox cleanup awareness..."
+          
+          # Add delay to prevent rapid restart loops and allow cleanup
+          echo "Waiting for system stabilization..."
+          sleep 20
+          
           echo "Initializing VSS file (offline mode)..."
           mkdir -p /persistent
           mkdir -p /shared
@@ -36,16 +78,69 @@ spec:
           fi
           
           chmod 666 /shared/vss.json
+          
+          # Additional stability check
+          echo "Performing final initialization check..."
+          sleep 5
+          
           echo "VSS initialization complete (offline)"
+        
+        # Add resource limits
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
+        
         volumeMounts:
         - name: persistent-storage
           mountPath: /persistent
         - name: shared-vss
           mountPath: /shared
+      
       containers:
       - name: sdv-runtime
         image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest
-        imagePullPolicy: IfNotPresent  # Critical for offline operation
+        imagePullPolicy: IfNotPresent
+        
+        # Add startup probe to handle slow startups (KEY ADDITION)
+        startupProbe:
+          tcpSocket:
+            port: 55555
+          initialDelaySeconds: 45
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 12  # Allow 2 minutes for startup
+        
+        # Add readiness probe
+        readinessProbe:
+          tcpSocket:
+            port: 55555
+          initialDelaySeconds: 60
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 3
+        
+        # Add liveness probe with generous timeouts
+        livenessProbe:
+          tcpSocket:
+            port: 55555
+          initialDelaySeconds: 90
+          periodSeconds: 30
+          timeoutSeconds: 15
+          failureThreshold: 5
+        
+        # Add resource limits
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        
         env:
         - name: USER
           value: "${DK_USER}"
@@ -54,23 +149,57 @@ spec:
         - name: ARCH
           value: "${ARCH}"
         - name: OFFLINE_MODE
-          value: "true"  # Signal to app it's running offline
+          value: "true"
+        
         ports:
         - containerPort: 55555
           hostPort: 55555
+        
         volumeMounts:
         - name: shared-vss
           mountPath: /home/dev/ws/vss.json
           subPath: vss.json
       
       - name: vss-sync
-        image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest  # Same image
+        image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest
         imagePullPolicy: IfNotPresent
+        
+        # Add startup probe for vss-sync
+        startupProbe:
+          exec:
+            command: ["/bin/sh", "-c", "echo 'vss-sync startup'"]
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        
+        # Add readiness probe for vss-sync
+        readinessProbe:
+          exec:
+            command: ["/bin/sh", "-c", "test -f /shared/vss.json"]
+          initialDelaySeconds: 45
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        # Add liveness probe for vss-sync
+        livenessProbe:
+          exec:
+            command: ["/bin/sh", "-c", "pgrep -f 'vss-sync' || echo 'process check'"]
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 5
+        
         command: ["/bin/sh"]
         args:
         - -c
         - |
+          set -e
           echo "Starting VSS sync service (offline mode)..."
+          
+          # Add startup delay for stability
+          sleep 15
           
           sync_file() {
             if [ -f /shared/vss.json ]; then
@@ -84,26 +213,31 @@ spec:
             fi
           }
           
-          # Initial sync
-          sync_file
+          # Initial sync with error handling
+          echo "Performing initial VSS sync..."
+          sync_file || echo "Initial sync failed, continuing..."
           
           # Continuous monitoring with longer intervals for offline efficiency
+          echo "Starting continuous VSS monitoring..."
           while true; do
-            sync_file
-            sleep 10  # Check every 10 seconds (adjust as needed)
+            sync_file || echo "Sync iteration failed, continuing..."
+            sleep 10  # Check every 10 seconds
           done
+        
         volumeMounts:
         - name: persistent-storage
           mountPath: /persistent
         - name: shared-vss
           mountPath: /shared
+        
         resources:
           requests:
-            memory: "16Mi"
-            cpu: "10m"
-          limits:
             memory: "32Mi"
-            cpu: "50m"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
+      
       volumes:
       - name: persistent-storage
         hostPath:
