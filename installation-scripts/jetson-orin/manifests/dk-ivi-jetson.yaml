@@ -46,7 +46,7 @@ roleRef:
   name: dk-ivi-cluster-role
   apiGroup: rbac.authorization.k8s.io
 ---
-# Main Deployment with SDV Runtime waiting
+# Main Deployment with offline mode support
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -98,7 +98,7 @@ spec:
         runAsNonRoot: false
         runAsUser: 0
       
-      # Enhanced init container with proper SDV runtime waiting
+      # Enhanced init container with offline mode support
       initContainers:
       - name: wait-for-sdv-runtime
         image: alpine:latest
@@ -107,43 +107,219 @@ spec:
         args:
         - |
           set -e
-          echo "=== Using Host kubectl via nsenter ==="
+          echo "=== DK-IVI Init Container with Offline Mode Support ==="
+          echo "Timestamp: $(date)"
           
-          # Install nsenter if not available
-          apk add --no-cache util-linux
-          
-          # Execute kubectl on host namespace
-          nsenter -t 1 -m -p kubectl get deployments > /dev/null 2>&1 || {
-            echo "✗ Cannot access host kubectl"
-            exit 1
+          # Function to check network connectivity
+          check_network() {
+            echo "Checking network connectivity..."
+            
+            # Check local network first
+            if ping -c 1 -W 2 127.0.0.1 >/dev/null 2>&1; then
+              echo "✓ Local network: OK"
+            else
+              echo "✗ Local network: FAILED"
+              return 1
+            fi
+            
+            # Check if we can reach k8s API server
+            if timeout 5 wget -q --spider http://127.0.0.1:6443 2>/dev/null; then
+              echo "✓ K8s API server reachable"
+              return 0
+            elif timeout 5 nc -z 127.0.0.1 6443 2>/dev/null; then
+              echo "✓ K8s API server port accessible"
+              return 0
+            else
+              echo "⚠ K8s API server not accessible"
+              return 1
+            fi
           }
           
-          echo "✓ Host kubectl access successful"
+          # Function to check kubectl availability and permissions
+          check_kubectl() {
+            echo "Checking kubectl availability..."
+            
+            # Try multiple kubectl locations
+            KUBECTL_PATH=""
+            for path in "/usr/local/bin/kubectl" "/usr/bin/kubectl" "/bin/kubectl"; do
+              if [ -f "$path" ] && [ -x "$path" ]; then
+                KUBECTL_PATH="$path"
+                echo "✓ Found kubectl at: $path"
+                break
+              fi
+            done
+            
+            if [ -z "$KUBECTL_PATH" ]; then
+              echo "✗ kubectl not found in standard locations"
+              return 1
+            fi
+            
+            # Test kubectl functionality
+            if timeout 10 $KUBECTL_PATH version --client >/dev/null 2>&1; then
+              echo "✓ kubectl client working"
+            else
+              echo "✗ kubectl client failed"
+              return 1
+            fi
+            
+            # Test cluster connectivity
+            if timeout 15 $KUBECTL_PATH cluster-info >/dev/null 2>&1; then
+              echo "✓ kubectl cluster connectivity: OK"
+              return 0
+            else
+              echo "⚠ kubectl cluster connectivity: FAILED"
+              return 1
+            fi
+          }
           
-          # Check for SDV runtime using host kubectl
-          if nsenter -t 1 -m -p kubectl get deployment sdv-runtime > /dev/null 2>&1; then
-            echo "✓ Found SDV Runtime deployment"
-            nsenter -t 1 -m -p kubectl wait --for=condition=available --timeout=300s deployment/sdv-runtime
-            echo "✓ SDV Runtime is ready"
+          # Function to check using host kubectl via nsenter
+          check_host_kubectl() {
+            echo "Attempting to use host kubectl via nsenter..."
+            
+            # Install nsenter if not available
+            if ! command -v nsenter >/dev/null 2>&1; then
+              echo "Installing nsenter..."
+              apk add --no-cache util-linux 2>/dev/null || {
+                echo "⚠ Cannot install nsenter, skipping host kubectl method"
+                return 1
+              }
+            fi
+            
+            # Test host kubectl access
+            if timeout 10 nsenter -t 1 -m -p kubectl version --client >/dev/null 2>&1; then
+              echo "✓ Host kubectl accessible via nsenter"
+            else
+              echo "✗ Host kubectl not accessible via nsenter"
+              return 1
+            fi
+            
+            # Test host kubectl cluster connectivity
+            if timeout 15 nsenter -t 1 -m -p kubectl cluster-info >/dev/null 2>&1; then
+              echo "✓ Host kubectl cluster connectivity: OK"
+              return 0
+            else
+              echo "⚠ Host kubectl cluster connectivity: FAILED"
+              return 1
+            fi
+          }
+          
+          # Function to wait for SDV runtime
+          wait_for_sdv_runtime() {
+            local kubectl_cmd="$1"
+            echo "Searching for SDV Runtime deployment..."
+            
+            # Check multiple namespaces
+            local namespaces="default kube-system sdv-system"
+            local found_namespace=""
+            
+            for ns in $namespaces; do
+              if timeout 10 $kubectl_cmd get deployment sdv-runtime -n "$ns" >/dev/null 2>&1; then
+                found_namespace="$ns"
+                echo "✓ Found SDV Runtime deployment in namespace: $ns"
+                break
+              fi
+            done
+            
+            if [ -z "$found_namespace" ]; then
+              echo "⚠ SDV Runtime deployment not found in any namespace"
+              echo "Available deployments:"
+              timeout 10 $kubectl_cmd get deployments --all-namespaces 2>/dev/null | head -10 || echo "Cannot list deployments"
+              return 1
+            fi
+            
+            # Wait for deployment to be available
+            echo "Waiting for SDV Runtime deployment to be available..."
+            if timeout 300 $kubectl_cmd wait --for=condition=available --timeout=300s deployment/sdv-runtime -n "$found_namespace"; then
+              echo "✓ SDV Runtime deployment is available"
+            else
+              echo "⚠ SDV Runtime deployment not available within timeout"
+              timeout 10 $kubectl_cmd describe deployment sdv-runtime -n "$found_namespace" 2>/dev/null || true
+              return 1
+            fi
+            
+            # Wait for pods to be ready
+            echo "Waiting for SDV Runtime pods to be ready..."
+            if timeout 180 $kubectl_cmd wait --for=condition=ready --timeout=180s pod -l app=sdv-runtime -n "$found_namespace"; then
+              echo "✓ SDV Runtime pods are ready"
+              timeout 10 $kubectl_cmd get pods -l app=sdv-runtime -n "$found_namespace" -o wide 2>/dev/null || true
+              return 0
+            else
+              echo "⚠ SDV Runtime pods not ready within timeout"
+              timeout 10 $kubectl_cmd get pods -l app=sdv-runtime -n "$found_namespace" -o wide 2>/dev/null || true
+              return 1
+            fi
+          }
+          
+          # Main logic with offline mode support
+          echo "Starting system initialization with offline mode support..."
+          sleep 15  # Initial stabilization delay
+          
+          # Detect operational mode
+          ONLINE_MODE=false
+          KUBECTL_METHOD=""
+          
+          if check_network; then
+            echo "=== ONLINE MODE DETECTED ==="
+            ONLINE_MODE=true
+            
+            # Try ServiceAccount kubectl first
+            if check_kubectl; then
+              KUBECTL_METHOD="kubectl"
+              echo "✓ Using ServiceAccount kubectl"
+            # Fallback to host kubectl
+            elif check_host_kubectl; then
+              KUBECTL_METHOD="nsenter -t 1 -m -p kubectl"
+              echo "✓ Using host kubectl via nsenter"
+            else
+              echo "⚠ No working kubectl method found, switching to offline mode"
+              ONLINE_MODE=false
+            fi
           else
-            echo "⚠ SDV Runtime not found"
+            echo "=== OFFLINE MODE DETECTED ==="
+            echo "Network connectivity issues detected, running in offline mode"
           fi
           
-          echo "=== Init completed ==="
+          # Execute based on mode
+          if [ "$ONLINE_MODE" = "true" ] && [ -n "$KUBECTL_METHOD" ]; then
+            echo "Attempting to wait for SDV Runtime..."
+            if wait_for_sdv_runtime "$KUBECTL_METHOD"; then
+              echo "✓ SDV Runtime dependency satisfied"
+            else
+              echo "⚠ SDV Runtime dependency not satisfied, but continuing..."
+            fi
+          else
+            echo "=== OFFLINE MODE: Skipping SDV Runtime dependency check ==="
+            echo "Running in standalone mode without external dependencies"
+          fi
+          
+          # Final system stability check
+          echo "Performing final system stability check..."
+          sleep 10
+          
+          # Check critical host resources
+          echo "Checking critical resources:"
+          echo "- Docker socket: $([ -S /var/run/docker.sock ] && echo 'Available' || echo 'Not available')"
+          echo "- X11 socket: $([ -d /tmp/.X11-unix ] && echo 'Available' || echo 'Not available')"
+          echo "- DRI devices: $([ -d /dev/dri ] && echo 'Available' || echo 'Not available')"
+          
+          echo "=== Init container completed successfully ==="
+          echo "Mode: $([ "$ONLINE_MODE" = "true" ] && echo 'ONLINE' || echo 'OFFLINE')"
+          echo "kubectl method: ${KUBECTL_METHOD:-'None (offline mode)'}"
         
         securityContext:
-          privileged: true  # Required for nsenter
+          privileged: true  # Required for nsenter and system checks
         
         volumeMounts:
-        - name: host-proc
-          mountPath: /host/proc
-          readOnly: true
+        # - name: host-proc
+        #   mountPath: /host/proc
+        #   readOnly: true
         - name: kubectl-binary
           mountPath: /usr/local/bin/kubectl
           readOnly: true
         - name: kube-config
           mountPath: /root/.kube/config
           readOnly: true
+        
         resources:
           requests:
             memory: "64Mi"
@@ -153,9 +329,10 @@ spec:
             cpu: "100m"
       
       volumes:
-      - name: host-proc
-        mountPath: /host/proc
-        readOnly: true
+      # - name: host-proc
+      #   hostPath:
+      #     path: /proc
+      #     type: Directory
       - name: dk-home
         hostPath: 
           path: ${HOME_DIR}/.dk
