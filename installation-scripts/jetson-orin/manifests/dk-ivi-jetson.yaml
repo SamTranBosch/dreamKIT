@@ -1,23 +1,38 @@
-# ServiceAccount and RBAC
+# ServiceAccount
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: dk-ivi-service-account
   namespace: default
-
 ---
+# ClusterRole with comprehensive permissions
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: dk-ivi-cluster-role
 rules:
+# Pod permissions
 - apiGroups: [""]
-  resources: ["pods", "services", "endpoints"]
-  verbs: ["get", "list", "watch"]
+  resources: ["pods", "pods/status", "pods/log"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Deployment permissions
 - apiGroups: ["apps"]
-  resources: ["deployments", "replicasets"]
+  resources: ["deployments", "deployments/status", "replicasets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Service permissions
+- apiGroups: [""]
+  resources: ["services", "endpoints", "configmaps", "secrets"]
   verbs: ["get", "list", "watch"]
+# Node permissions
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+# Events permissions
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch", "create"]
 ---
+# ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -31,23 +46,18 @@ roleRef:
   name: dk-ivi-cluster-role
   apiGroup: rbac.authorization.k8s.io
 ---
-# Main Deployment with enhanced sandbox conflict prevention
+# Main Deployment with SDV Runtime waiting
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: dk-ivi
   namespace: default
-  # Add annotation to force new pod creation
   annotations:
     deployment.kubernetes.io/revision: "1"
 spec:
   replicas: 1
-  # Enhanced strategy to prevent sandbox conflicts
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 1
-      maxSurge: 0
+    type: Recreate  # Prevents multiple instances running simultaneously
   selector:
     matchLabels:
       app: dk-ivi
@@ -55,7 +65,6 @@ spec:
     metadata:
       labels:
         app: dk-ivi
-      # Add unique annotation to force pod recreation
       annotations:
         restart-timestamp: "{{ .Values.timestamp | default now }}"
         pod.kubernetes.io/sandbox-cleanup: "force"
@@ -65,9 +74,8 @@ spec:
         kubernetes.io/hostname: xip
       hostNetwork: true
       restartPolicy: Always
-      terminationGracePeriodSeconds: 60  # Increased for proper cleanup
+      terminationGracePeriodSeconds: 60
       
-      # Enhanced tolerations
       tolerations:
       - key: "node.kubernetes.io/unreachable"
         operator: "Exists"
@@ -90,63 +98,120 @@ spec:
         runAsNonRoot: false
         runAsUser: 0
       
-      # Enhanced init container with sandbox cleanup
+      # Enhanced init container with proper SDV runtime waiting
       initContainers:
       - name: wait-for-sdv-runtime
-        image: bitnami/kubectl:latest
+        image: bitnami/kubectl:1.28
         imagePullPolicy: IfNotPresent
         command: ['sh', '-c']
         args:
         - |
           set -e
-          echo "Starting sandbox cleanup and initialization..."
+          echo "=== DK-IVI Init Container Started ==="
+          echo "Timestamp: $(date)"
           
-          # Add delay to prevent rapid restart loops and allow cleanup
+          # Add initial delay for system stabilization
           echo "Waiting for system stabilization..."
           sleep 30
           
-          # Check for any existing containers with similar names and log them
-          echo "Checking for container conflicts..."
-          
-          echo "Starting in offline mode - using local images only"
-          echo "Checking kubectl permissions..."
-          
-          # Test permissions with timeout
-          timeout 15s kubectl auth can-i get deployments || { 
-            echo "Warning: No permission to get deployments, continuing anyway..."; 
-          }
-          timeout 15s kubectl auth can-i get pods || { 
-            echo "Warning: No permission to get pods, continuing anyway..."; 
-          }
-          
-          echo "Checking for sdv-runtime deployment..."
-          if timeout 30s kubectl get deployment sdv-runtime >/dev/null 2>&1; then
-            echo "SDV Runtime deployment found, waiting for it to be available..."
-            
-            if timeout 180s kubectl wait --for=condition=available --timeout=180s deployment/sdv-runtime; then
-              echo "SDV Runtime deployment is available"
-              
-              echo "Waiting for sdv-runtime pod to be ready..."
-              if timeout 120s kubectl wait --for=condition=ready --timeout=120s pod -l app=sdv-runtime; then
-                echo "SDV Runtime pod is ready"
-              else
-                echo "Warning: SDV Runtime pod not ready, but continuing..."
-                kubectl get pods -l app=sdv-runtime || true
-              fi
-            else
-              echo "Warning: SDV Runtime deployment not available, but continuing..."
-              kubectl describe deployment sdv-runtime || true
-            fi
+          # Test kubectl connectivity and permissions
+          echo "Testing kubectl connectivity..."
+          if kubectl version --client > /dev/null 2>&1; then
+            echo "✓ kubectl client is working"
           else
-            echo "SDV Runtime deployment not found - this might be expected"
-            echo "Continuing with IVI interface startup..."
+            echo "✗ kubectl client issue detected"
+            exit 1
           fi
           
-          # Final stability check before main container starts
-          echo "Performing final system stability check..."
-          sleep 10
+          # Test cluster connectivity
+          echo "Testing cluster connectivity..."
+          if kubectl cluster-info > /dev/null 2>&1; then
+            echo "✓ Cluster connectivity established"
+          else
+            echo "✗ Cannot connect to cluster"
+            kubectl cluster-info || true
+            exit 1
+          fi
           
-          echo "Init container completed successfully"
+          # Test permissions
+          echo "Testing RBAC permissions..."
+          
+          # Test deployment permissions
+          if kubectl auth can-i get deployments; then
+            echo "✓ Deployment read permissions: OK"
+          else
+            echo "✗ Deployment read permissions: FAILED"
+            echo "Current permissions:"
+            kubectl auth can-i --list || true
+            exit 1
+          fi
+          
+          # Test pod permissions
+          if kubectl auth can-i get pods; then
+            echo "✓ Pod read permissions: OK"
+          else
+            echo "✗ Pod read permissions: FAILED"
+            exit 1
+          fi
+          
+          # Check for SDV Runtime deployment
+          echo "Searching for SDV Runtime deployment..."
+          
+          # First check in default namespace
+          if kubectl get deployment sdv-runtime -n default > /dev/null 2>&1; then
+            NAMESPACE="default"
+            echo "✓ Found SDV Runtime deployment in namespace: $NAMESPACE"
+          # Check in other common namespaces
+          elif kubectl get deployment sdv-runtime -n kube-system > /dev/null 2>&1; then
+            NAMESPACE="kube-system"
+            echo "✓ Found SDV Runtime deployment in namespace: $NAMESPACE"
+          elif kubectl get deployment sdv-runtime --all-namespaces > /dev/null 2>&1; then
+            NAMESPACE=$(kubectl get deployment sdv-runtime --all-namespaces -o jsonpath='{.items[0].metadata.namespace}')
+            echo "✓ Found SDV Runtime deployment in namespace: $NAMESPACE"
+          else
+            echo "⚠ SDV Runtime deployment not found in any namespace"
+            echo "Available deployments:"
+            kubectl get deployments --all-namespaces | grep -E "(NAME|sdv|runtime)" || true
+            echo "Continuing without SDV Runtime dependency..."
+            sleep 10
+            echo "=== Init container completed (no SDV Runtime) ==="
+            exit 0
+          fi
+          
+          # Wait for SDV Runtime deployment to be available
+          echo "Waiting for SDV Runtime deployment to be available..."
+          if kubectl wait --for=condition=available --timeout=300s deployment/sdv-runtime -n $NAMESPACE; then
+            echo "✓ SDV Runtime deployment is available"
+          else
+            echo "⚠ SDV Runtime deployment not available within timeout"
+            echo "Deployment status:"
+            kubectl describe deployment sdv-runtime -n $NAMESPACE || true
+            echo "Continuing anyway..."
+          fi
+          
+          # Wait for SDV Runtime pods to be ready
+          echo "Waiting for SDV Runtime pods to be ready..."
+          if kubectl wait --for=condition=ready --timeout=180s pod -l app=sdv-runtime -n $NAMESPACE; then
+            echo "✓ SDV Runtime pods are ready"
+            
+            # Additional verification
+            echo "SDV Runtime pod status:"
+            kubectl get pods -l app=sdv-runtime -n $NAMESPACE -o wide
+            
+          else
+            echo "⚠ SDV Runtime pods not ready within timeout"
+            echo "Pod status:"
+            kubectl get pods -l app=sdv-runtime -n $NAMESPACE -o wide || true
+            echo "Pod descriptions:"
+            kubectl describe pods -l app=sdv-runtime -n $NAMESPACE || true
+            echo "Continuing anyway..."
+          fi
+          
+          # Final system check
+          echo "Performing final system stability check..."
+          sleep 15
+          
+          echo "=== Init container completed successfully ==="
         
         securityContext:
           runAsNonRoot: false
@@ -201,10 +266,10 @@ spec:
         startupProbe:
           exec:
             command: ["/bin/sh", "-c", "echo 'startup check' && sleep 2"]
-          initialDelaySeconds: 45  # Longer delay for sandbox stability
+          initialDelaySeconds: 45
           periodSeconds: 15
           timeoutSeconds: 10
-          failureThreshold: 12  # Allow 3 minutes for startup
+          failureThreshold: 12
         
         readinessProbe:
           exec:
