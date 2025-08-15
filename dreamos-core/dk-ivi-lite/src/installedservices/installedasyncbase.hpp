@@ -130,7 +130,7 @@ InstalledAsyncBase<TI,TD>::InstalledAsyncBase(QObject *parent)
     });
 
     /* create node-timer only when requested by subclass  */
-    QTimer::singleShot(0, this, [this]() {
+    QTimer::singleShot(100, this, [this]() {
         if ( this->wantsNodeMonitor() ) {
             m_nodeTimer = new QTimer(this);
             connect(m_nodeTimer, &QTimer::timeout,
@@ -140,7 +140,7 @@ InstalledAsyncBase<TI,TD>::InstalledAsyncBase(QObject *parent)
     });
 
     /* create WLAN-timer only when requested by subclass */
-    QTimer::singleShot(0, this, [this]() {
+    QTimer::singleShot(200, this, [this]() {
         if ( this->wantsWlanMonitor() ) {
             m_wlanTimer = new QTimer(this);
             connect(m_wlanTimer, &QTimer::timeout,
@@ -255,8 +255,8 @@ void InstalledAsyncBase<TI,TD>::executeServices(
         if (!subscribe) return true;
         bool ready=false; try{ ready = K3s::Installer::nodeReady("vip",5);}catch(...){}
         if (!ready)
-            NOTIFY_WARNING("Deployment warning",
-                           "Worker node not ready   deployment may fail.");
+            NOTIFY_WARNING("Deployment",
+                           "Worker node not ready. Deployment may fail.");
         return true;
     });
 
@@ -271,8 +271,10 @@ void InstalledAsyncBase<TI,TD>::executeServices(
         }, Qt::BlockingQueuedConnection);
 
         *kubectlOk = ok;                 // <-- store the result here
-        if(!ok) throw std::runtime_error("kubectl failed");
-        return true;
+        if(!ok) {
+            qWarning() << "[InstalledAsyncBase::executeServices] kubectl command failed.";
+        }
+        return ok;
     });
 
     /* step-2  : update local model &     start docker-ps watcher       */
@@ -292,8 +294,8 @@ void InstalledAsyncBase<TI,TD>::executeServices(
     connect(chain,&Async::Chain::finished,this,
             [id,subscribe](bool ok){
         const QString act = subscribe ? "deployed" : "stopped";
-        if(ok) NOTIFY_SUCCESS("Service", QString("Service '%1' %2").arg(id,act));
-        else   NOTIFY_ERROR  ("Service", QString("Failed to %1 '%2'").arg(act,id));
+        if(ok) NOTIFY_SUCCESS("Deployment", QString("Serv.Id '%1' %2 has been triggered").arg(id,act));
+        else   NOTIFY_ERROR  ("Deployment", QString("Serv.Id %1 '%2' has been triggered").arg(act,id));
     });
     chain->start();
 }
@@ -386,8 +388,8 @@ void InstalledAsyncBase<TI,TD>::checkWorkerNodeStatus()
     auto st = ok?NodeStatus::Online:NodeStatus::Offline;
     if(st==m_nodeStatus) return;
     m_nodeStatus=st;
-    if(ok) NOTIFY_SUCCESS("Node","vip online");
-    else   NOTIFY_WARNING("Node","vip offline");
+    if(ok) NOTIFY_SUCCESS("Node","VIP (Vehicle Integration Platform) ~ ONLINE");
+    else   NOTIFY_WARNING("Node","VIP (Vehicle Integration Platform) ~ OFFLINE");
     static_cast<TD*>(this)->workerNodeStatusChanged(ok);
 }
 
@@ -470,7 +472,7 @@ void InstalledAsyncBase<TI,TD>::handleInternetStatusChange(WlanStatus newStatus)
     m_wlanStatus = newStatus;
     
     if (newStatus == WlanStatus::Connected) {
-        NOTIFY_SUCCESS("Internet", "Internet connection restored");
+        NOTIFY_SUCCESS("Connection", "Internet connection restored");
         qDebug() << "[InternetCheck] Internet connection restored";
         
         // Only trigger restart options if we were previously disconnected
@@ -481,7 +483,7 @@ void InstalledAsyncBase<TI,TD>::handleInternetStatusChange(WlanStatus newStatus)
             });
         }
     } else {
-        NOTIFY_WARNING("Internet", "Internet connection lost");
+        NOTIFY_WARNING("Connection", "Internet connection lost");
         qDebug() << "[InternetCheck] Internet connection lost";
     }
     

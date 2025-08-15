@@ -78,8 +78,14 @@ ManifestInfo ManifestBuilder::write(const AppInfo &app)
 kind: Deployment
 metadata:
   name: ${name}
+  namespace: default
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
   selector:
     matchLabels:
       app: ${name}
@@ -91,18 +97,52 @@ spec:
       nodeSelector:
         kubernetes.io/hostname: ${node}
       hostNetwork: true
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 60
+      
+      tolerations:
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      
       containers:
       - name: ${name}
         image: ${image}
         imagePullPolicy: IfNotPresent
+        
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "300m"
+        
         env:
 ${env}
         args:
 ${args}
+        
         securityContext:
           privileged: true
+        
         tty: true
         stdin: true
+        
+        volumeMounts:
+        - name: dev
+          mountPath: /dev
+      
+      volumes:
+      - name: dev
+        hostPath: 
+          path: /dev
+          type: Directory
 )";
     QString deployYaml = QString(deployTpl)
             .replace("${name}",  appId)
@@ -111,9 +151,9 @@ ${args}
             .replace("${env}",   envBlock)
             .replace("${args}",  argBlock);
 
-    info.deploymentYaml = writeFile(
-        QString("%1/%2_deployment.yaml").arg(info.dir, app.id),
-        deployYaml);
+info.deploymentYaml = writeFile(
+    QString("%1/%2_deployment.yaml").arg(info.dir, app.id),
+    deployYaml);
 
     // ── pull job yaml ───────────────────────────────────────────────
     static const char *pullTpl = R"(apiVersion: batch/v1
@@ -169,10 +209,6 @@ spec:
       nodeSelector:
         kubernetes.io/hostname: ${node}
       restartPolicy: Never
-      initContainers:
-      - name: pull
-        image: ${src}
-        command: ["true"]
       containers:
       - name: mirror
         image: quay.io/containers/skopeo:latest

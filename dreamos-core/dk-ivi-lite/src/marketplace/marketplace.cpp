@@ -403,38 +403,23 @@ void MarketplaceViewModel::confirmInstall()
 
 bool MarketplaceViewModel::performCleanup(const QString &appId)
 {
-    QStringList cleanupCmds;
-    cleanupCmds << QString("kubectl delete job mirror-%1 --ignore-not-found")
-                       .arg(appId)
-               << QString("kubectl delete job pull-%1 --ignore-not-found")
-                       .arg(appId);
+    QMetaObject::invokeMethod(qApp, [&]() {
+        K3s::Installer inst;
+        QEventLoop loop;
+        
+        QStringList cleanupCmds;
+        cleanupCmds << QString("kubectl delete job mirror-%1 --ignore-not-found")
+                        .arg(appId)
+                << QString("kubectl delete job pull-%1 --ignore-not-found")
+                        .arg(appId);
 
-    bool ok = false;
+        QObject::connect(&inst, &K3s::Installer::finished, &loop,
+                       [&](bool) { loop.quit(); }); // Don't care about result
+        inst.queueAndRun(cleanupCmds);
+        loop.exec();
+    }, Qt::BlockingQueuedConnection);
 
-    QMetaObject::invokeMethod(
-        qApp,                                   // jump to GUI thread
-        [this, cleanupCmds, &ok]()
-        {
-            QEventLoop loop;
-
-            /* capture final result */
-            connect(m_installer, &K3s::Installer::finished,
-                    &loop,
-                    [&](bool result){ ok = result; loop.quit(); },
-                    Qt::QueuedConnection);
-
-            m_installer->queueAndRun(cleanupCmds);
-            loop.exec();                        // wait for finished()
-        },
-        Qt::BlockingQueuedConnection);          // block worker thread
-
-    if(ok) {
-        qDebug() << "[MarketplaceViewModel::performCleanup] Cleanup commands executed successfully for app:" << appId;
-    } else {
-        qWarning() << "[MarketplaceViewModel::performCleanup] Failed to execute cleanup commands for app:" << appId;
-        // Note: cleanup failure is not critical, continue with installation
-    }
-    return true;  // Always continue even if cleanup fails
+    return m_lastInstallationSuccess;
 }
 
 bool MarketplaceViewModel::confirmInstallPre(int idx)
@@ -472,7 +457,6 @@ bool MarketplaceViewModel::confirmInstallPre(int idx)
             qWarning() << "[MarketplaceViewModel::confirmInstall] worker node not Ready";
             NOTIFY_WARNING("Installation", "The remote node is not ready. Please check the node status or try again later.");
             jobResult = false;
-            throw std::runtime_error("[MarketplaceViewModel::confirmInstall] worker node not Ready");
         }
         else
             qDebug() << "[MarketplaceViewModel::confirmInstall] worker node is Ready";
