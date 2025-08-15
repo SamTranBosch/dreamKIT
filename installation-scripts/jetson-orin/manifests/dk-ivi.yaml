@@ -1,3 +1,36 @@
+# ServiceAccount and RBAC
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dk-ivi-service-account
+  namespace: default
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dk-ivi-cluster-role
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dk-ivi-cluster-role-binding
+subjects:
+- kind: ServiceAccount
+  name: dk-ivi-service-account
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: dk-ivi-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+---
 # Main Deployment with enhanced sandbox conflict prevention
 apiVersion: apps/v1
 kind: Deployment
