@@ -101,122 +101,43 @@ spec:
       # Enhanced init container with proper SDV runtime waiting
       initContainers:
       - name: wait-for-sdv-runtime
-        image: bitnami/kubectl:1.28
+        image: alpine:latest
         imagePullPolicy: IfNotPresent
         command: ['sh', '-c']
         args:
         - |
           set -e
-          echo "=== DK-IVI Init Container Started ==="
-          echo "Timestamp: $(date)"
+          echo "=== Using Host kubectl via nsenter ==="
           
-          # Add initial delay for system stabilization
-          echo "Waiting for system stabilization..."
-          sleep 30
-          
-          # Test kubectl connectivity and permissions
-          echo "Testing kubectl connectivity..."
-          if kubectl version --client > /dev/null 2>&1; then
-            echo "✓ kubectl client is working"
-          else
-            echo "✗ kubectl client issue detected"
+          # Execute kubectl on host namespace
+          nsenter -t 1 -m -p kubectl get deployments > /dev/null 2>&1 || {
+            echo "✗ Cannot access host kubectl"
             exit 1
-          fi
+          }
           
-          # Test cluster connectivity
-          echo "Testing cluster connectivity..."
-          if kubectl cluster-info > /dev/null 2>&1; then
-            echo "✓ Cluster connectivity established"
+          echo "✓ Host kubectl access successful"
+          
+          # Check for SDV runtime using host kubectl
+          if nsenter -t 1 -m -p kubectl get deployment sdv-runtime > /dev/null 2>&1; then
+            echo "✓ Found SDV Runtime deployment"
+            nsenter -t 1 -m -p kubectl wait --for=condition=available --timeout=300s deployment/sdv-runtime
+            echo "✓ SDV Runtime is ready"
           else
-            echo "✗ Cannot connect to cluster"
-            kubectl cluster-info || true
-            exit 1
+            echo "⚠ SDV Runtime not found"
           fi
           
-          # Test permissions
-          echo "Testing RBAC permissions..."
-          
-          # Test deployment permissions
-          if kubectl auth can-i get deployments; then
-            echo "✓ Deployment read permissions: OK"
-          else
-            echo "✗ Deployment read permissions: FAILED"
-            echo "Current permissions:"
-            kubectl auth can-i --list || true
-            exit 1
-          fi
-          
-          # Test pod permissions
-          if kubectl auth can-i get pods; then
-            echo "✓ Pod read permissions: OK"
-          else
-            echo "✗ Pod read permissions: FAILED"
-            exit 1
-          fi
-          
-          # Check for SDV Runtime deployment
-          echo "Searching for SDV Runtime deployment..."
-          
-          # First check in default namespace
-          if kubectl get deployment sdv-runtime -n default > /dev/null 2>&1; then
-            NAMESPACE="default"
-            echo "✓ Found SDV Runtime deployment in namespace: $NAMESPACE"
-          # Check in other common namespaces
-          elif kubectl get deployment sdv-runtime -n kube-system > /dev/null 2>&1; then
-            NAMESPACE="kube-system"
-            echo "✓ Found SDV Runtime deployment in namespace: $NAMESPACE"
-          elif kubectl get deployment sdv-runtime --all-namespaces > /dev/null 2>&1; then
-            NAMESPACE=$(kubectl get deployment sdv-runtime --all-namespaces -o jsonpath='{.items[0].metadata.namespace}')
-            echo "✓ Found SDV Runtime deployment in namespace: $NAMESPACE"
-          else
-            echo "⚠ SDV Runtime deployment not found in any namespace"
-            echo "Available deployments:"
-            kubectl get deployments --all-namespaces | grep -E "(NAME|sdv|runtime)" || true
-            echo "Continuing without SDV Runtime dependency..."
-            sleep 10
-            echo "=== Init container completed (no SDV Runtime) ==="
-            exit 0
-          fi
-          
-          # Wait for SDV Runtime deployment to be available
-          echo "Waiting for SDV Runtime deployment to be available..."
-          if kubectl wait --for=condition=available --timeout=300s deployment/sdv-runtime -n $NAMESPACE; then
-            echo "✓ SDV Runtime deployment is available"
-          else
-            echo "⚠ SDV Runtime deployment not available within timeout"
-            echo "Deployment status:"
-            kubectl describe deployment sdv-runtime -n $NAMESPACE || true
-            echo "Continuing anyway..."
-          fi
-          
-          # Wait for SDV Runtime pods to be ready
-          echo "Waiting for SDV Runtime pods to be ready..."
-          if kubectl wait --for=condition=ready --timeout=180s pod -l app=sdv-runtime -n $NAMESPACE; then
-            echo "✓ SDV Runtime pods are ready"
-            
-            # Additional verification
-            echo "SDV Runtime pod status:"
-            kubectl get pods -l app=sdv-runtime -n $NAMESPACE -o wide
-            
-          else
-            echo "⚠ SDV Runtime pods not ready within timeout"
-            echo "Pod status:"
-            kubectl get pods -l app=sdv-runtime -n $NAMESPACE -o wide || true
-            echo "Pod descriptions:"
-            kubectl describe pods -l app=sdv-runtime -n $NAMESPACE || true
-            echo "Continuing anyway..."
-          fi
-          
-          # Final system check
-          echo "Performing final system stability check..."
-          sleep 15
-          
-          echo "=== Init container completed successfully ==="
+          echo "=== Init completed ==="
         
         securityContext:
-          runAsNonRoot: false
-          runAsUser: 0
+          privileged: true  # Required for nsenter
+        
         volumeMounts:
+        # - name: host-proc
+        #   mountPath: /host/proc
+        #   readOnly: true
+        - name: offline-tools
+          mountPath: /host-bin
+          readOnly: true
         - name: kubectl-binary
           mountPath: /usr/local/bin/kubectl
           readOnly: true
@@ -232,6 +153,13 @@ spec:
             cpu: "100m"
       
       volumes:
+      # - name: host-proc
+      #   mountPath: /host/proc
+      #   readOnly: true
+      - name: offline-tools
+        hostPath:
+          path: /opt/k3s-tools/bin
+          type: Directory
       - name: dk-home
         hostPath: 
           path: ${HOME_DIR}/.dk
