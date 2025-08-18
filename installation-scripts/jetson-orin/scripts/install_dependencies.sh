@@ -40,6 +40,180 @@ install_if_missing() {
 }
 
 # ---------------------------------------------------------------------------
+# Helper   prepare host for offline k3s operation
+# ---------------------------------------------------------------------------
+prepare_offline_k3s_tools() {
+    show_info "Preparing host for offline k3s operation..."
+    
+    # Install required tools for k3s offline operation
+    local k3s_tools=(
+        "util-linux"
+        "netcat-openbsd" 
+        "iputils-ping"
+        "coreutils"
+        "procps"
+    )
+    
+    show_info "Installing k3s offline operation dependencies..."
+    for tool in "${k3s_tools[@]}"; do
+        install_if_missing "${tool%% *}" "$tool"
+    done
+    
+    # Create tools directory for container mounting
+    local tools_dir="/opt/k3s-tools/bin"
+    show_info "Creating k3s tools directory: $tools_dir"
+    
+    run_with_feedback \
+        "sudo mkdir -p $tools_dir" \
+        "k3s tools directory created" \
+        "Failed to create k3s tools directory" \
+        true true
+    
+    # Copy essential binaries to tools directory
+    show_info "Copying essential binaries for k3s offline operation..."
+    
+    local binaries=(
+        "/usr/bin/nsenter"
+        "/bin/ping"
+        "/bin/nc" 
+        "/usr/bin/timeout"
+        "/bin/ps"
+        "/usr/bin/pgrep"
+        "/usr/bin/pkill"
+        "/bin/kill"
+        "/usr/bin/nohup"
+        "/bin/sleep"
+        "/usr/bin/tee"
+        "/bin/cat"
+        "/bin/echo"
+        "/usr/bin/which"
+    )
+    
+    local copied_tools=()
+    local failed_tools=()
+    
+    for binary in "${binaries[@]}"; do
+        local binary_name=$(basename "$binary")
+        
+        if [ -f "$binary" ]; then
+            if sudo cp "$binary" "$tools_dir/" 2>/dev/null; then
+                copied_tools+=("$binary_name")
+            else
+                failed_tools+=("$binary_name")
+            fi
+        else
+            # Try alternative locations
+            local alt_binary=""
+            case "$binary_name" in
+                "nc")
+                    for alt in "/usr/bin/nc" "/bin/nc.openbsd" "/usr/bin/nc.openbsd"; do
+                        [ -f "$alt" ] && alt_binary="$alt" && break
+                    done
+                    ;;
+                "ping")
+                    for alt in "/usr/bin/ping" "/bin/ping"; do
+                        [ -f "$alt" ] && alt_binary="$alt" && break
+                    done
+                    ;;
+            esac
+            
+            if [ -n "$alt_binary" ] && [ -f "$alt_binary" ]; then
+                if sudo cp "$alt_binary" "$tools_dir/$binary_name" 2>/dev/null; then
+                    copied_tools+=("$binary_name")
+                else
+                    failed_tools+=("$binary_name")
+                fi
+            else
+                failed_tools+=("$binary_name")
+            fi
+        fi
+    done
+    
+    # Set proper permissions
+    run_with_feedback \
+        "sudo chmod +x $tools_dir/*" \
+        "Set executable permissions for k3s tools" \
+        "Failed to set permissions for k3s tools" \
+        true true
+    
+    # Report results
+    if [ ${#copied_tools[@]} -gt 0 ]; then
+        show_success "Copied ${#copied_tools[@]} tools for k3s offline operation"
+        show_info "Available tools: ${copied_tools[*]}"
+    fi
+    
+    if [ ${#failed_tools[@]} -gt 0 ]; then
+        show_warning "Failed to copy ${#failed_tools[@]} tools: ${failed_tools[*]}"
+    fi
+    
+    # Verify the setup
+    show_info "Verifying k3s tools setup..."
+    if [ -d "$tools_dir" ]; then
+        local tool_count=$(sudo find "$tools_dir" -type f -executable | wc -l)
+        show_success "k3s tools directory prepared with $tool_count executable tools"
+        
+        # List available tools for debugging
+        show_info "Tools available in $tools_dir:"
+        sudo ls -la "$tools_dir/" | while IFS= read -r line; do
+            echo -e "${DIM}  $line${NC}"
+        done
+    else
+        show_error "k3s tools directory setup failed"
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Helper   install additional system tools for k3s
+# ---------------------------------------------------------------------------
+install_k3s_system_dependencies() {
+    show_info "Installing additional system dependencies for k3s..."
+    
+    local k3s_deps=(
+        "systemd"
+        "systemctl"
+        "mount"
+        "umount"
+        "findmnt"
+        "lsblk"
+        "blkid"
+        "iptables"
+        "ip"
+        "ss"
+        "nsenter"
+        "unshare"
+        "cgroupfs-mount"
+    )
+    
+    # Install packages that provide these tools
+    local packages=(
+        "systemd"
+        "util-linux"
+        "mount"
+        "iptables"
+        "iproute2"
+        "cgroup-tools"
+    )
+    
+    for package in "${packages[@]}"; do
+        install_if_missing "${package%% *}" "$package"
+    done
+    
+    # Ensure cgroups are properly mounted
+    show_info "Checking cgroups configuration..."
+    if ! mount | grep -q cgroup; then
+        show_info "Mounting cgroups..."
+        run_with_feedback \
+            "sudo mount -t cgroup -o all cgroup /sys/fs/cgroup || true" \
+            "cgroups mounted successfully" \
+            "cgroups mount failed (may be normal)" \
+            false false
+    else
+        show_info "cgroups already mounted"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Helper   install k9s when missing
 # ---------------------------------------------------------------------------
 install_k9s() {
@@ -72,7 +246,6 @@ install_k9s() {
     local OS="linux"
     local TARBALL="k9s_${OS}_${ARCH}.tar.gz"
     local URL="https://github.com/derailed/k9s/releases/download/v${VERSION}/${TARBALL}"
-    # https://github.com/derailed/k9s/releases/download/v0.50.9/k9s_Linux_arm64.tar.gz
 
     # ---- Verify URL exists before downloading -----------------------------
     show_info "Verifying k9s release availability for ${ARCH}..."
@@ -236,12 +409,15 @@ install_nodejs_via_nvm() {
         true true
 }
 
+# ---------------------------------------------------------------------------
+# Main installation function with k3s offline preparation
+# ---------------------------------------------------------------------------
 install_dependencies() {
     local CURRENT_DIR="$1"
     local DK_USER="$2"
     
     echo -e "${BLUE}${BOLD}Installing System Dependencies${NC}"
-    echo -e "${DIM}This will install all required packages and tools${NC}"
+    echo -e "${DIM}This will install all required packages and tools for dreamOS and k3s${NC}"
     echo
     
     # 0) Update repositories first (only once)
@@ -277,15 +453,22 @@ install_dependencies() {
         fi
     fi
     
-    # 5) Kubernetes tools
+    # 5) k3s system dependencies and offline preparation
+    show_info "Installing k3s system dependencies..."
+    install_k3s_system_dependencies
+    
+    show_info "Preparing host for offline k3s operation..."
+    prepare_offline_k3s_tools
+    
+    # 6) Kubernetes tools
     show_info "Installing Kubernetes management tools..."
     install_k9s_if_missing
     
-    # 6) Additional system utilities
+    # 7) Additional system utilities
     show_info "Installing additional system utilities..."
     install_system_utilities
     
-    show_success "All system dependencies installed successfully"
+    show_success "All system dependencies and k3s offline tools installed successfully"
 }
 
 # Configure Docker service and user permissions
@@ -357,6 +540,9 @@ install_system_utilities() {
         "ca-certificates"
         "gnupg"
         "lsb-release"
+        "rsync"
+        "tar"
+        "gzip"
     )
     
     for util in "${utilities[@]}"; do
@@ -398,7 +584,7 @@ install_yq_if_missing() {
     fi
 }
 
-# Verify all installations
+# Verify all installations including k3s tools
 verify_dependencies() {
     echo -e "\n${CYAN}${BOLD}Verifying Dependencies Installation:${NC}"
     
@@ -412,6 +598,9 @@ verify_dependencies() {
         "curl:HTTP client"
         "jq:JSON processor"
         "yq:YAML processor"
+        "nsenter:Namespace enter tool"
+        "ping:Network connectivity test"
+        "nc:Network connection tool"
     )
     
     local failed_tools=()
@@ -429,8 +618,19 @@ verify_dependencies() {
         fi
     done
     
+    # Verify k3s tools directory
+    echo -e "\n${CYAN}${BOLD}Verifying k3s Offline Tools:${NC}"
+    local k3s_tools_dir="/opt/k3s-tools/bin"
+    if [ -d "$k3s_tools_dir" ]; then
+        local tool_count=$(sudo find "$k3s_tools_dir" -type f -executable 2>/dev/null | wc -l)
+        echo -e "${GREEN} ${CHECKMARK} k3s-tools: ${BOLD}${tool_count} tools${NC} ${DIM}(offline operation support)${NC}"
+    else
+        echo -e "${RED} ${CROSS} k3s-tools: ${BOLD}NOT FOUND${NC} ${DIM}(offline operation support)${NC}"
+        failed_tools+=("k3s-tools")
+    fi
+    
     if [ ${#failed_tools[@]} -eq 0 ]; then
-        echo -e "\n${GREEN}${BOLD}${CHECKMARK} All dependencies verified successfully!${NC}"
+        echo -e "\n${GREEN}${BOLD}${CHECKMARK} All dependencies and k3s offline tools verified successfully!${NC}"
         return 0
     else
         echo -e "\n${RED}${BOLD}${CROSS} Failed tools: ${failed_tools[*]}${NC}"
@@ -457,6 +657,13 @@ get_tool_version() {
         "curl"|"jq"|"yq")
             $tool --version 2>/dev/null | head -n1 | awk '{print $NF}' || echo "unknown"
             ;;
+        "nsenter"|"ping"|"nc")
+            if command -v "$tool" >/dev/null 2>&1; then
+                echo "installed"
+            else
+                echo "not found"
+            fi
+            ;;
         *)
             echo "installed"
             ;;
@@ -478,3 +685,4 @@ main() {
 # Export functions for use by parent script
 export -f install_dependencies configure_docker_service install_k9s_if_missing
 export -f install_system_utilities install_yq_if_missing verify_dependencies
+export -f prepare_offline_k3s_tools install_k3s_system_dependencies
