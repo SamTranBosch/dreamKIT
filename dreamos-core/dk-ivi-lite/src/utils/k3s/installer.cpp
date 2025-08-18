@@ -137,13 +137,27 @@ bool Installer::nodeReady(const QString &nodeName,
         qWarning() << "[Installer::nodeReady] kubectl not start";
         return false;
     }
-    proc.waitForFinished(timeoutSec * 1000);
+    
+    // Use a shorter, non-blocking approach
+    bool finished = proc.waitForFinished(timeoutSec * 1000);
+    if (!finished) {
+        qWarning() << "[Installer::nodeReady] kubectl timed out after" << timeoutSec << "seconds";
+        proc.kill();
+        proc.waitForFinished(1000); // Brief wait for cleanup
+        return false;
+    }
 
     QByteArray raw = proc.readAll();          // may contain noise
     if (stdoutText)
         *stdoutText = QString::fromUtf8(raw);
 
-    /* strip everything before first “{” so that QJson parses cleanly */
+    // Check exit code first
+    if (proc.exitCode() != 0) {
+        qDebug() << "[Installer::nodeReady] kubectl failed with exit code:" << proc.exitCode();
+        return false;
+    }
+
+    /* strip everything before first "{" so that QJson parses cleanly */
     int pos = raw.indexOf('{');
     if (pos < 0) {
         qWarning() << "[Installer::nodeReady] no JSON found";

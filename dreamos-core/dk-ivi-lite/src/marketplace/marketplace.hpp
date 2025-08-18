@@ -7,12 +7,10 @@
 
 // bring in your existing fetch helpers:
 #include "../utils/async/asyncjob.hpp"
-
 #include "../utils/core/fetching.hpp"
 #include "../utils/core/datamanager.hpp"
-
 #include "../utils/k3s/manifestbuilder.hpp"
-#include "../utils/k3s/installer.hpp"
+#include "../utils/k3s/jobmanager.hpp"
 
 class AppListModel : public QAbstractListModel {
     Q_OBJECT
@@ -93,9 +91,6 @@ class MarketplaceViewModel : public QObject {
     void setCurrentCategory(int idx);   // setter for Q_PROPERTY
     void appSelected(int idx);
     void confirmInstall();
-    bool confirmInstallPre(int idx);
-    bool confirmInstallPost(int idx);
-    bool performCleanup(const QString &appId);
     void cancelInstall();
 
   signals:
@@ -110,7 +105,14 @@ class MarketplaceViewModel : public QObject {
     void installFinished();
     void installError();
 
+  private slots:
+    void onInstallJobFinished(bool success);
+    void onCleanupJobFinished(bool success);
+
   private:
+    bool confirmInstallPre(int idx);
+    bool confirmInstallPost(int idx);
+
     AppListModel*      m_apps         = nullptr;
     CategoryListModel* m_cats         = nullptr;
     QList<AppInfo>     m_lastApps;
@@ -119,12 +121,10 @@ class MarketplaceViewModel : public QObject {
     Async::Chain                   *m_installChain = nullptr;
     Async::Chain                   *m_cleanupChain = nullptr;
 
-    K3s::Installer      *m_installer = nullptr;
+    // Extracted K3s functionality
+    K3s::JobManager      *m_jobManager = nullptr;
     K3s::ManifestInfo    m_lastManifest;
 
-    QStringList        m_installCommands;     // queue of kubectl steps
-    int                m_installCmdIndex{0};  // current step index
-    void               runNextInstallCommand();
     bool               m_lastInstallationSuccess = false;
 
     int     m_currentCategory = 0;

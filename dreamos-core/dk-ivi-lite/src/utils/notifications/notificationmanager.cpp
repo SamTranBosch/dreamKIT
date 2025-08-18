@@ -20,7 +20,7 @@ NotificationManager::NotificationManager(QObject *parent)
     connect(m_cleanupTimer, &QTimer::timeout, this, &NotificationManager::cleanupOldNotifications);
     m_cleanupTimer->start();
 
-    qDebug() << "[NotificationManager] Initialized with max visible:" << m_maxVisible;
+    // qDebug() << "[NotificationManager] Initialized with max visible:" << m_maxVisible;
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -45,11 +45,11 @@ QString NotificationManager::showNotification(const QString &title,
     data.category = category;
     data.timestamp = QDateTime::currentDateTime();
 
-    qDebug() << "[NotificationManager] Creating notification:" << data.id << "Title:" << title << "Level:" << level;
+    // qDebug() << "[NotificationManager] Creating notification:" << data.id << "Title:" << title << "Level:" << level;
 
     // Check if we should queue this notification
     if (shouldQueue()) {
-        qDebug() << "[NotificationManager] Queueing notification" << data.id << "- active count:" << m_activeNotifications.size();
+        // qDebug() << "[NotificationManager] Queueing notification" << data.id << "- active count:" << m_activeNotifications.size();
         m_queue.enqueue(data);
         startQueueProcessing();
         emit queueCountChanged();
@@ -61,7 +61,7 @@ QString NotificationManager::showNotification(const QString &title,
     m_activeNotifications.append(data);
     addToHistory(data);
     
-    qDebug() << "[NotificationManager] Showing notification immediately:" << data.id << "Active count:" << m_activeNotifications.size();
+    // qDebug() << "[NotificationManager] Showing notification immediately:" << data.id << "Active count:" << m_activeNotifications.size();
     
     emit notificationAdded(data.id, data.title, data.message, 
                           static_cast<int>(data.level), data.duration, 
@@ -266,7 +266,7 @@ void NotificationManager::extendDuration(const QString &notificationId, int addi
     // Emit signal so QML can handle timer extension
     emit notificationExtended(notificationId, additionalMs);
     
-    qDebug() << "[NotificationManager] Extended notification" << notificationId << "by" << additionalMs << "ms";
+    // qDebug() << "[NotificationManager] Extended notification" << notificationId << "by" << additionalMs << "ms";
 }
 
 QString NotificationManager::categoryNotify(const QString &category,
@@ -293,7 +293,7 @@ QString NotificationManager::categoryNotify(const QString &category,
 void NotificationManager::startBatch(const QString &batchId)
 {
     m_batchedNotifications[batchId] = QList<NotificationData>();
-    qDebug() << "[NotificationManager] Started batch" << batchId;
+    // qDebug() << "[NotificationManager] Started batch" << batchId;
 }
 
 void NotificationManager::addToBatch(const QString &batchId, 
@@ -315,18 +315,18 @@ void NotificationManager::addToBatch(const QString &batchId,
     data.timestamp = QDateTime::currentDateTime();
     
     m_batchedNotifications[batchId].append(data);
-    qDebug() << "[NotificationManager] Added to batch" << batchId << ":" << title;
+    // qDebug() << "[NotificationManager] Added to batch" << batchId << ":" << title;
 }
 
 void NotificationManager::commitBatch(const QString &batchId, int maxNotifications)
 {
     if (!m_batchedNotifications.contains(batchId)) {
-        qDebug() << "[NotificationManager] Batch" << batchId << "not found";
+        // qDebug() << "[NotificationManager] Batch" << batchId << "not found";
         return;
     }
     
     auto notifications = m_batchedNotifications.take(batchId);
-    qDebug() << "[NotificationManager] Committing batch" << batchId << "with" << notifications.size() << "notifications";
+    // qDebug() << "[NotificationManager] Committing batch" << batchId << "with" << notifications.size() << "notifications";
     
     if (notifications.size() <= maxNotifications) {
         // Show all notifications individually
@@ -363,7 +363,7 @@ void NotificationManager::commitBatch(const QString &batchId, int maxNotificatio
         }
         
         showNotification(summaryTitle, summaryMessage, 0, 7000, "batch_summary");
-        qDebug() << "[NotificationManager] Created summary notification for" << notifications.size() << "items";
+        // qDebug() << "[NotificationManager] Created summary notification for" << notifications.size() << "items";
     }
     
     m_totalCount += notifications.size();
@@ -415,7 +415,7 @@ QString NotificationManager::findSimilarNotification(const QString &title, const
 // ───────────────────────────────────────────────────────────────
 void NotificationManager::dismissNotification(const QString &id)
 {
-    qDebug() << "[NotificationManager] Dismissing notification:" << id;
+    // qDebug() << "[NotificationManager] Dismissing notification:" << id;
     
     // Clean up group mappings
     for (auto it = m_groupToNotificationMap.begin(); it != m_groupToNotificationMap.end();) {
@@ -441,7 +441,7 @@ void NotificationManager::dismissNotification(const QString &id)
         if (m_activeNotifications[i].id == id) {
             m_activeNotifications.removeAt(i);
             found = true;
-            qDebug() << "[NotificationManager] Removed notification from active list. Remaining count:" << m_activeNotifications.size();
+            // qDebug() << "[NotificationManager] Removed notification from active list. Remaining count:" << m_activeNotifications.size();
             break;
         }
     }
@@ -450,7 +450,7 @@ void NotificationManager::dismissNotification(const QString &id)
     if (m_activeTasks.contains(id)) {
         m_activeTasks.remove(id);
         found = true;
-        qDebug() << "[NotificationManager] Removed notification from active tasks";
+        // qDebug() << "[NotificationManager] Removed notification from active tasks";
     }
     
     if (found) {
@@ -458,7 +458,7 @@ void NotificationManager::dismissNotification(const QString &id)
         
         // Process next in queue if available
         if (!m_queue.isEmpty() && m_activeNotifications.size() < m_maxVisible) {
-            qDebug() << "[NotificationManager] Processing next queued notification";
+            // qDebug() << "[NotificationManager] Processing next queued notification";
             processNextInQueue();
         }
         
@@ -468,13 +468,13 @@ void NotificationManager::dismissNotification(const QString &id)
             emit queueCountChanged();
         }
     } else {
-        qDebug() << "[NotificationManager] Warning: Notification" << id << "not found for dismissal";
+        // qDebug() << "[NotificationManager] Warning: Notification" << id << "not found for dismissal";
     }
 }
 
 void NotificationManager::dismissAll()
 {
-    qDebug() << "[NotificationManager] Dismissing all notifications";
+    // qDebug() << "[NotificationManager] Dismissing all notifications";
     m_activeNotifications.clear();
     m_activeTasks.clear();
     m_queue.clear();
@@ -489,7 +489,7 @@ void NotificationManager::dismissAll()
 
 void NotificationManager::dismissCategory(const QString &category)
 {
-    qDebug() << "[NotificationManager] Dismissing category:" << category;
+    // qDebug() << "[NotificationManager] Dismissing category:" << category;
     
     // Remove from active notifications
     int removedCount = 0;
@@ -515,7 +515,7 @@ void NotificationManager::dismissCategory(const QString &category)
     }
     m_queue = filteredQueue;
 
-    qDebug() << "[NotificationManager] Removed" << removedCount << "notifications from category" << category;
+    // qDebug() << "[NotificationManager] Removed" << removedCount << "notifications from category" << category;
     
     emit categoryDismissed(category);
     emit queueCountChanged();
@@ -588,7 +588,7 @@ QString NotificationManager::startTask(const QString &taskName, const QString &d
     emit totalNotificationsChanged();
     emit unreadCountChanged();
 
-    qDebug() << "[NotificationManager] Started task:" << task.id << "message:" << task.message;
+    // qDebug() << "[NotificationManager] Started task:" << task.id << "message:" << task.message;
     return taskId;
 }
 
@@ -603,7 +603,7 @@ void NotificationManager::updateTask(const QString &taskId, int progress, const 
     }
     
     emit notificationUpdated(taskId, task.message, task.progress);
-    qDebug() << "[NotificationManager] Updated task:" << task.id << "progress:" << progress << "message:" << task.message;
+    // qDebug() << "[NotificationManager] Updated task:" << task.id << "progress:" << progress << "message:" << task.message;
 }
 
 void NotificationManager::completeTask(const QString &taskId, const QString &result)
@@ -624,7 +624,7 @@ void NotificationManager::completeTask(const QString &taskId, const QString &res
     QTimer::singleShot(task.duration, this, [this, taskId](){
         dismissNotification(taskId);
     });
-    qDebug() << "[NotificationManager] Completed task:" << task.id << "message:" << task.message;
+    // qDebug() << "[NotificationManager] Completed task:" << task.id << "message:" << task.message;
 }
 
 void NotificationManager::failTask(const QString &taskId, const QString &error)
@@ -640,7 +640,7 @@ void NotificationManager::failTask(const QString &taskId, const QString &error)
     addToHistory(task);
     
     emit notificationUpdated(taskId, task.message, task.progress);
-    qDebug() << "[NotificationManager] Failed task:" << taskId << "message:" << task.message;
+    // qDebug() << "[NotificationManager] Failed task:" << taskId << "message:" << task.message;
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -652,7 +652,7 @@ void NotificationManager::setMaxVisibleNotifications(int max)
         m_maxVisible = qMax(1, max);
         emit maxVisibleNotificationsChanged();
         
-        qDebug() << "[NotificationManager] Max visible notifications set to:" << m_maxVisible;
+        // qDebug() << "[NotificationManager] Max visible notifications set to:" << m_maxVisible;
         
         // If we now have more space, process queue
         if (m_activeNotifications.size() < m_maxVisible && !m_queue.isEmpty()) {
@@ -677,7 +677,7 @@ void NotificationManager::setGlobalMute(bool mute)
     if (m_globalMute != mute) {
         m_globalMute = mute;
         emit globalMuteChanged();
-        qDebug() << "[NotificationManager] Global mute set to:" << mute;
+        // qDebug() << "[NotificationManager] Global mute set to:" << mute;
     }
 }
 
@@ -730,14 +730,14 @@ void NotificationManager::clearHistory()
     m_history.clear();
     m_totalCount = 0;
     emit totalNotificationsChanged();
-    qDebug() << "[NotificationManager] History cleared";
+    // qDebug() << "[NotificationManager] History cleared";
 }
 
 void NotificationManager::markAllAsRead()
 {
     m_unreadCount = 0;
     emit unreadCountChanged();
-    qDebug() << "[NotificationManager] All notifications marked as read";
+    // qDebug() << "[NotificationManager] All notifications marked as read";
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -745,13 +745,13 @@ void NotificationManager::markAllAsRead()
 // ───────────────────────────────────────────────────────────────
 void NotificationManager::handleNotificationAction(const QString &id, const QString &actionId)
 {
-    qDebug() << "[NotificationManager] Notification action:" << id << "action:" << actionId;
+    // qDebug() << "[NotificationManager] Notification action:" << id << "action:" << actionId;
     emit notificationAction(id, actionId);
 }
 
 void NotificationManager::handleNotificationClick(const QString &id)
 {
-    qDebug() << "[NotificationManager] Notification clicked:" << id;
+    // qDebug() << "[NotificationManager] Notification clicked:" << id;
     
     // Mark as read when clicked
     if (m_unreadCount > 0) {
@@ -782,7 +782,7 @@ void NotificationManager::processQueue()
     // Stop timer if queue is empty
     if (m_queue.isEmpty()) {
         m_queueTimer->stop();
-        qDebug() << "[NotificationManager] Queue processing completed - all notifications shown";
+        // qDebug() << "[NotificationManager] Queue processing completed - all notifications shown";
     }
 }
 
@@ -807,7 +807,7 @@ void NotificationManager::cleanupOldNotifications()
         
     int removedCount = originalSize - m_history.size();
     if (removedCount > 0) {
-        qDebug() << "[NotificationManager] Cleaned up" << removedCount << "old notifications from history";
+        // qDebug() << "[NotificationManager] Cleaned up" << removedCount << "old notifications from history";
     }
 }
 
@@ -830,7 +830,7 @@ bool NotificationManager::shouldQueue() const
 {
     bool shouldQueue = m_activeNotifications.size() >= m_maxVisible;
     if (shouldQueue) {
-        qDebug() << "[NotificationManager] Should queue: active=" << m_activeNotifications.size() << "max=" << m_maxVisible;
+        // qDebug() << "[NotificationManager] Should queue: active=" << m_activeNotifications.size() << "max=" << m_maxVisible;
     }
     return shouldQueue;
 }
@@ -844,9 +844,9 @@ void NotificationManager::processNextInQueue()
     NotificationData data = m_queue.dequeue();
     m_activeNotifications.append(data);
     
-    qDebug() << "[NotificationManager] Processing queued notification:" << data.id 
-             << "Active count:" << m_activeNotifications.size() 
-             << "Queue remaining:" << m_queue.size();
+    // qDebug() << "[NotificationManager] Processing queued notification:" << data.id 
+            //  << "Active count:" << m_activeNotifications.size() 
+            //  << "Queue remaining:" << m_queue.size();
     
     emit notificationAdded(data.id, data.title, data.message, 
                           static_cast<int>(data.level), data.duration, 
@@ -863,7 +863,7 @@ void NotificationManager::processNextInQueue()
 void NotificationManager::startQueueProcessing()
 {
     if (!m_queueTimer->isActive() && !m_queue.isEmpty()) {
-        qDebug() << "[NotificationManager] Starting queue processing - queue size:" << m_queue.size();
+        // qDebug() << "[NotificationManager] Starting queue processing - queue size:" << m_queue.size();
         m_queueTimer->start();
     }
 }

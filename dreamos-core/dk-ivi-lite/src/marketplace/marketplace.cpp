@@ -13,7 +13,7 @@
 
 using namespace Async;
 using K3s::ManifestBuilder;
-using K3s::Installer;
+using K3s::JobManager;
 
 extern QString DK_VCU_USERNAME;
 extern QString DK_ARCH;
@@ -89,7 +89,6 @@ void AppListModel::setAppInstalled(int idx, bool inst) {
     emit dataChanged(mi, mi, {InstalledRole});
 }
 
-
 //-----------------------------------------------------------------------------
 // 2) CategoryListModel
 //-----------------------------------------------------------------------------
@@ -153,7 +152,6 @@ void CategoryListModel::loadFromJsonFile(const QString &filePath) {
     endResetModel();
 }
 
-
 //-----------------------------------------------------------------------------
 // 3) MarketplaceViewModel
 //-----------------------------------------------------------------------------
@@ -161,24 +159,23 @@ MarketplaceViewModel::MarketplaceViewModel(QObject *parent)
   : QObject(parent)
   , m_apps(new AppListModel(this))
   , m_cats(new CategoryListModel(this))
-  , m_installer(new Installer(this))
+  , m_jobManager(new K3s::JobManager(this))
 {
-    // … load categories, do initial search, etc …
-    // 1) load the file you shipped or created at runtime
+    // Load categories
     QString cfg = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
                   + "/marketplaceselection.json";
     m_cats->loadFromJsonFile(cfg);
 
-    connect(m_installer, &Installer::busyChanged,
-        this, [this](bool b){ m_isInstalling = b;
-                               emit isInstallingChanged(b); });
-    connect(m_installer, &Installer::finished,
-            this, [this](bool ok){
-        if (ok && m_pendingIndex >= 0)
-            m_apps->setAppInstalled(m_pendingIndex, true);
-        m_pendingIndex = -1;
-        m_installingIndex = -1;
-        emit installingIndexChanged(-1);
+    // Connect job manager signals for installation tracking
+    connect(m_jobManager, &K3s::JobManager::jobFinished,
+            this, [this](const QString &operation, bool success, const QString &message) {
+        qDebug() << "[MarketplaceViewModel] Job finished:" << operation << "Success:" << success;
+        
+        if (operation.contains("Installation Commands")) {
+            onInstallJobFinished(success);
+        } else if (operation.contains("Cleanup")) {
+            onCleanupJobFinished(success);
+        }
     });
 }
 
@@ -191,9 +188,6 @@ void MarketplaceViewModel::setCurrentCategory(int idx) {
     search(m_lastSearchTerm);
 }
 
-/* ─────────────────────────────────────────────────────────── */
-/*  Asynchronous search                                       */
-/* ─────────────────────────────────────────────────────────── */
 void MarketplaceViewModel::search(const QString &term)
 {
     // keep the filter text
@@ -247,6 +241,10 @@ void MarketplaceViewModel::search(const QString &term)
         m_lastApps = finalList;
         m_apps->updateApps(finalList);
         emit searchFinished();
+        
+        // Clean up search job
+        m_searchJob->deleteLater();
+        m_searchJob = nullptr;
     });
 }
 
@@ -255,27 +253,34 @@ void MarketplaceViewModel::appSelected(int idx) {
 
     if (idx < 0 || idx >= m_lastApps.size()) return;
     if (!info.value("isInstalled").toBool()) {
-        // 1) your existing “ask for confirmation” logic
+        // ask for confirmation
         m_pendingIndex   = idx;
         m_pendingName    = info.value("name").toString();
         m_installPending = true;
         m_installingIndex = idx;
+        m_isInstalling   = false; // Not installing yet, just pending
         emit pendingAppNameChanged(m_pendingName);
         emit installPendingChanged(true);
         emit installingIndexChanged(m_installingIndex);
+        emit isInstallingChanged(false);
     }
 }
 
-/* ─────────────────────────────────────────────────────────── */
-/*  Asynchronous (sequential) confirmInstall                  */
-/* ─────────────────────────────────────────────────────────── */
 void MarketplaceViewModel::confirmInstall()
 {
     if (!m_installPending) return;
+    
     const int idx = m_installingIndex;
+    if (idx < 0 || idx >= m_lastApps.size()) {
+        qWarning() << "[MarketplaceViewModel] Invalid installation index:" << idx;
+        cancelInstall();
+        return;
+    }
+    
     const AppInfo app = m_lastApps[idx];         // copy for threads
-
-    /* -------- build kubectl command list *later* (see below) ---- */
+    
+    m_isInstalling = true;
+    emit isInstallingChanged(true);
 
     if (m_installChain) m_installChain->deleteLater();
     m_installChain = new Chain(this);
@@ -294,10 +299,9 @@ void MarketplaceViewModel::confirmInstall()
     });
 
     /* ------------------------------------------------------------------ *
-     *  step-1  : Chain-step : pull / mirror images                       *
+     *  step-1  : Use JobManager for installation commands via GUI thread *
      * ------------------------------------------------------------------ */
-    m_installChain->add([this, app]()->bool        //  returns bool !
-    {
+    m_installChain->add([this, app]()->bool {
         /* 1) build command list --------------------------------------- */
         QStringList cmds;
 
@@ -315,34 +319,35 @@ void MarketplaceViewModel::confirmInstall()
                         "job/pull-%1 --timeout=600s")
                     .arg(app.id);
 
-        /* 2) execute in GUI thread through *existing* m_installer ----- */
+        /* 2) Execute via JobManager in GUI thread -------------------- */
         bool ok = false;
+        QString errorMsg;
+        
+        QMetaObject::invokeMethod(qApp, [this, cmds, &ok, &errorMsg]() {
+            // Create job in GUI thread to avoid parenting issues
+            auto *job = m_jobManager->runInstallationCommands(cmds);
+            QEventLoop loop;
+            
+            connect(job, &Async::JobBase::finished, &loop, [&](bool) {
+                K3s::JobManager::JobResult result = job->result();
+                ok = result.success;
+                errorMsg = result.errorMessage;
+                loop.quit();
+            });
+            
+            // Job will be cleaned up automatically via Qt's parent-child system
+            loop.exec();
+        }, Qt::BlockingQueuedConnection);
 
-        QMetaObject::invokeMethod(
-            qApp,                                   // jump to GUI thread
-            [this, cmds, &ok]()
-            {
-                QEventLoop loop;
-
-                /* capture final result */
-                connect(m_installer, &K3s::Installer::finished,
-                        &loop,
-                        [&](bool result){ ok = result; loop.quit(); },
-                        Qt::QueuedConnection);
-
-                m_installer->queueAndRun(cmds);
-                loop.exec();                        // wait for finished()
-            },
-            Qt::BlockingQueuedConnection);          // block worker thread
-
-        /* 3) propagate result to Chain -------------------------------- */
-        if(ok) {
-            qDebug() << "[MarketplaceViewModel::confirmInstall] Commands executed successfully.";
+        m_lastInstallationSuccess = ok;
+        
+        if (!ok) {
+            qWarning() << "[MarketplaceViewModel::confirmInstall] Installation commands failed:" << errorMsg;
+            NOTIFY_WARNING("Installation", "Failed to execute installation commands: " + errorMsg);
         } else {
-            qWarning() << "[MarketplaceViewModel::confirmInstall] Failed to execute commands.";
-            NOTIFY_WARNING("Installation", "Failed to execute commands for "
-                "pulling images. Please check the logs or try again later.");
+            qDebug() << "[MarketplaceViewModel::confirmInstall] Installation commands executed successfully.";
         }
+        
         return ok;                                 // false -> abort chain
     });
 
@@ -353,15 +358,10 @@ void MarketplaceViewModel::confirmInstall()
         return confirmInstallPost(idx);
     });
 
-    /* -------------- Setup cleanup chain ------------------------ */
-    m_cleanupChain->add([this, app]()->bool{
-        return performCleanup(app.id);
-    });
-
     /* -------------- Install chain result handler --------------- */
     connect(m_installChain, &Chain::finished,
-            this, [this](bool ok){
-        m_lastInstallationSuccess = ok;
+            this, [this, app](bool ok){
+        // m_lastInstallationSuccess = ok;
         
         if (ok) {
             qDebug() << "[MarketplaceViewModel::confirmInstall] Installation completed successfully, starting cleanup...";
@@ -369,97 +369,127 @@ void MarketplaceViewModel::confirmInstall()
             qDebug() << "[MarketplaceViewModel::confirmInstall] Installation failed, starting cleanup anyway...";
         }
         
-        // Always start cleanup chain regardless of installation result
+        // Start cleanup chain - create cleanup job in GUI thread
+        m_cleanupChain->add([this, app]()->bool{
+            bool cleanupOk = false;
+            
+            QMetaObject::invokeMethod(qApp, [this, app, &cleanupOk]() {
+                auto *job = m_jobManager->cleanupInstallationJobs(app.id);
+                QEventLoop loop;
+                
+                connect(job, &Async::JobBase::finished, &loop, [&](bool) {
+                    cleanupOk = true; // Cleanup always "succeeds"
+                    loop.quit();
+                });
+                
+                loop.exec();
+            }, Qt::BlockingQueuedConnection);
+            
+            return cleanupOk;
+        });
+        
+        // Setup cleanup chain result handler
+        connect(m_cleanupChain, &Chain::finished,
+                this, [this](bool cleanupOk){
+            m_installPending = false;
+            m_isInstalling = false;
+            
+            emit installPendingChanged(false);
+            emit isInstallingChanged(false);
+            
+            if (cleanupOk) {
+                qDebug() << "[MarketplaceViewModel::confirmInstall] Cleanup completed successfully.";
+            } else {
+                qWarning() << "[MarketplaceViewModel::confirmInstall] Cleanup failed.";
+            }
+            
+            // Update UI and emit appropriate signal based on installation result
+            if (m_lastInstallationSuccess && m_pendingIndex >= 0) {
+                m_apps->setAppInstalled(m_pendingIndex, true);
+                emit installFinished();
+            } else {
+                emit installError();
+            }
+
+            // Reset state
+            m_pendingIndex = -1;
+            m_installingIndex = -1;
+            emit installingIndexChanged(-1);
+            
+            // Clean up chains
+            if (m_installChain) {
+                m_installChain->deleteLater();
+                m_installChain = nullptr;
+            }
+            if (m_cleanupChain) {
+                m_cleanupChain->deleteLater();
+                m_cleanupChain = nullptr;
+            }
+        });
+
+        // Start the cleanup chain
         m_cleanupChain->start();
     });
 
-    /* -------------- Cleanup chain result handler --------------- */
-    connect(m_cleanupChain, &Chain::finished,
-            this, [this](bool cleanupOk){
-        m_installPending = false;
-        emit installPendingChanged(false);
-        
-        if (cleanupOk) {
-            qDebug() << "[MarketplaceViewModel::confirmInstall] Cleanup completed successfully.";
-        } else {
-            qWarning() << "[MarketplaceViewModel::confirmInstall] Cleanup failed.";
-        }
-        
-        // Emit appropriate signal based on installation result
-        if (m_lastInstallationSuccess) {
-            emit installFinished();
-        } else {
-            emit installError();
-        }
-
-        m_installChain->deleteLater();
-        m_installChain = nullptr;
-        m_cleanupChain->deleteLater();
-        m_cleanupChain = nullptr;
-    });
-
+    // Start the installation chain
     m_installChain->start();
-}
-
-bool MarketplaceViewModel::performCleanup(const QString &appId)
-{
-    QMetaObject::invokeMethod(qApp, [&]() {
-        K3s::Installer inst;
-        QEventLoop loop;
-        
-        QStringList cleanupCmds;
-        cleanupCmds << QString("kubectl delete job mirror-%1 --ignore-not-found")
-                        .arg(appId)
-                << QString("kubectl delete job pull-%1 --ignore-not-found")
-                        .arg(appId);
-
-        QObject::connect(&inst, &K3s::Installer::finished, &loop,
-                       [&](bool) { loop.quit(); }); // Don't care about result
-        inst.queueAndRun(cleanupCmds);
-        loop.exec();
-    }, Qt::BlockingQueuedConnection);
-
-    return m_lastInstallationSuccess;
 }
 
 bool MarketplaceViewModel::confirmInstallPre(int idx)
 {
     bool jobResult = true;
-    /* ----------------------------------------------------------- *
-     * step-0  : update tracking json                              *
-     * ----------------------------------------------------------- */
+    
+    /* Update tracking json and create manifest */
     DataManager dm;
     QJsonArray arr = dm.load(m_lastSearchTerm);
 
     const AppInfo &app = m_lastApps[idx];
     bool exists = false;
-    for (auto v : arr)
-        if (v.isObject() && v.toObject().value("id").toString() == app.id)
-            { exists = true; break; }
-
-    if (!exists) {
-        m_lastManifest = ManifestBuilder::write(app);
+    for (auto v : arr) {
+        if (v.isObject() && v.toObject().value("id").toString() == app.id) {
+            exists = true; 
+            break; 
+        }
     }
 
-    /* ----------------------------------------------------------- *
-     * step-1  : verify worker node online (optional)              *
-     * ----------------------------------------------------------- */
-    qDebug() << "[MarketplaceViewModel::confirmInstall] Instaling on node:"
+    if (!exists) {
+        try {
+            m_lastManifest = ManifestBuilder::write(app);
+            qDebug() << "[MarketplaceViewModel::confirmInstallPre] Manifest created for:" << app.id;
+        } catch (const std::exception &e) {
+            qWarning() << "[MarketplaceViewModel::confirmInstallPre] Failed to create manifest:" << e.what();
+            return false;
+        }
+    }
+
+    /* Verify worker node online if needed */
+    qDebug() << "[MarketplaceViewModel::confirmInstall] Installing on node:"
              << m_lastManifest.deployNodeName
              << "isRemoteNode:" << m_lastManifest.isRemoteNode;
+             
     if (m_lastManifest.isRemoteNode) {
-        const QString nodeName = m_lastManifest.deployNodeName;
-        if (nodeName.isEmpty()){
-            qDebug() << "[MarketplaceViewModel::confirmInstall] deployNodeName missing in manifest";
-        }
-
-        if (!K3s::Installer::nodeReady("vip", 5)){
+        bool nodeReady = false;
+        
+        // Check node readiness in GUI thread to avoid parenting issues
+        QMetaObject::invokeMethod(qApp, [this, &nodeReady]() {
+            auto *nodeJob = m_jobManager->checkNodeReady("vip", 3);
+            QEventLoop loop;
+            
+            connect(nodeJob, &Async::JobBase::finished, &loop, [&](bool) {
+                nodeReady = nodeJob->result();
+                loop.quit();
+            });
+            
+            loop.exec();
+        }, Qt::BlockingQueuedConnection);
+        
+        if (!nodeReady) {
             qWarning() << "[MarketplaceViewModel::confirmInstall] worker node not Ready";
             NOTIFY_WARNING("Installation", "The remote node is not ready. Please check the node status or try again later.");
             jobResult = false;
-        }
-        else
+        } else {
             qDebug() << "[MarketplaceViewModel::confirmInstall] worker node is Ready";
+        }
     }
     
     return jobResult;
@@ -468,29 +498,39 @@ bool MarketplaceViewModel::confirmInstallPre(int idx)
 bool MarketplaceViewModel::confirmInstallPost(int idx)
 {
     bool jobResult = true;
-    // update tracking json
-    DataManager dm;
-    QJsonArray arr = dm.load(m_lastSearchTerm);
-    qDebug() << "[MarketplaceViewModel::confirmInstallPost] Loaded " << m_lastSearchTerm;
+    
+    try {
+        // update tracking json
+        DataManager dm;
+        QJsonArray arr = dm.load(m_lastSearchTerm);
+        qDebug() << "[MarketplaceViewModel::confirmInstallPost] Loaded " << m_lastSearchTerm;
 
-    const AppInfo &app = m_lastApps[idx];
-    bool exists = false;
-    for (auto v : arr)
-        if (v.isObject() && v.toObject().value("id").toString() == app.id)
-            { exists = true; break; }
+        const AppInfo &app = m_lastApps[idx];
+        bool exists = false;
+        for (auto v : arr) {
+            if (v.isObject() && v.toObject().value("id").toString() == app.id) {
+                exists = true; 
+                break; 
+            }
+        }
 
-    if (!exists) {
-        QJsonObject rec;
-        rec["id"]   = app.id;
-        rec["name"] = app.name;
-        rec["author"] = app.author;
-        rec["rating"] = app.rating;
-        rec["thumbnail"] = app.iconUrl;
-        rec["installedAt"] = QDateTime::currentDateTime().toString(Qt::ISODate);
-        arr.append(rec);
-        // save the updated array
-        dm.save(m_lastSearchTerm, arr);
-        qDebug() << "[MarketplaceViewModel::confirmInstallPost] save the updated array";
+        if (!exists) {
+            QJsonObject rec;
+            rec["id"]   = app.id;
+            rec["name"] = app.name;
+            rec["author"] = app.author;
+            rec["rating"] = app.rating;
+            rec["thumbnail"] = app.iconUrl;
+            rec["installedAt"] = QDateTime::currentDateTime().toString(Qt::ISODate);
+            arr.append(rec);
+            
+            // save the updated array
+            dm.save(m_lastSearchTerm, arr);
+            qDebug() << "[MarketplaceViewModel::confirmInstallPost] Saved updated array";
+        }
+    } catch (const std::exception &e) {
+        qWarning() << "[MarketplaceViewModel::confirmInstallPost] Error updating DB:" << e.what();
+        jobResult = false;
     }
     
     return jobResult;
@@ -498,8 +538,29 @@ bool MarketplaceViewModel::confirmInstallPost(int idx)
 
 void MarketplaceViewModel::cancelInstall() {
     if (!m_installPending) return;
+    
     m_installPending = false;
-    emit installPendingChanged(false);
+    m_isInstalling = false;
     m_installingIndex = -1;
+    m_pendingIndex = -1;
+    
+    emit installPendingChanged(false);
+    emit isInstallingChanged(false);
     emit installingIndexChanged(-1);
+    
+    qDebug() << "[MarketplaceViewModel] Installation cancelled";
+}
+
+void MarketplaceViewModel::onInstallJobFinished(bool success)
+{
+    qDebug() << "[MarketplaceViewModel] Install job finished with result:" << success;
+    // The main logic is handled in the chain callbacks
+    // This is just for additional tracking if needed
+}
+
+void MarketplaceViewModel::onCleanupJobFinished(bool success)
+{
+    qDebug() << "[MarketplaceViewModel] Cleanup job finished with result:" << success;
+    // The main logic is handled in the chain callbacks
+    // This is just for additional tracking if needed
 }

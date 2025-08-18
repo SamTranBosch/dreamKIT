@@ -1,28 +1,18 @@
 #pragma once
 #include <QObject>
 #include <QTimer>
-#include <QProcess>
 #include <QJsonArray>
 #include <QEventLoop>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
 
 #include "../utils/async/asyncjob.hpp"
 #include "../utils/core/datamanager.hpp"
-#include "../utils/k3s/installer.hpp"
 #include "../utils/notifications/notificationmanager.hpp"
+#include "../utils/k3s/jobmanager.hpp"
+#include "../utils/monitor/wlanmonitor.hpp"
+#include "../utils/monitor/autorestartmanager.hpp"
 #include "installedcheckthread.hpp"
 
 extern QString DK_CONTAINER_ROOT;
-
-/* worker-node enum */
-enum class NodeStatus { Unknown, Online, Offline };
-Q_DECLARE_METATYPE(NodeStatus)
-
-/* WLAN connection enum */
-enum class WlanStatus { Unknown, Connected, Disconnected };
-Q_DECLARE_METATYPE(WlanStatus)
 
 /********************************************************************/
 template<class TI, class TD>
@@ -30,6 +20,7 @@ class InstalledAsyncBase : public QObject
 {
 public:
     explicit InstalledAsyncBase(QObject *parent = nullptr);
+    virtual ~InstalledAsyncBase();
 
     /* must be provided by concrete subclass */
     virtual QString dbKey()      const = 0;
@@ -43,10 +34,11 @@ public:
     Q_INVOKABLE void removeServices(int idx);
     Q_INVOKABLE virtual void openAppEditor(int) { }          // optional
 
-    bool workerNodeOnline() const { return m_nodeStatus == NodeStatus::Online; }
+    // Status accessors
+    bool workerNodeOnline() const;
+    bool wlanConnected() const;
     
     /* restart options when internet is available */
-    bool wlanConnected() const { return m_wlanStatus == WlanStatus::Connected; }
     Q_INVOKABLE void restartSdvRuntime();
     Q_INVOKABLE void restartApplication(); 
     Q_INVOKABLE void forceRestartBoth();
@@ -59,6 +51,9 @@ protected:
 
     /* subclasses return true if they want WLAN monitoring */
     virtual bool wantsWlanMonitor() const { return false; }
+    
+    /* subclasses return true if they want auto-restart functionality */
+    virtual bool wantsAutoRestart() const { return false; }
 
     /* helper used by InstalledCheckThread */
     void fileChanged(const QString&);
@@ -69,26 +64,32 @@ protected:
     /* shared editor launcher (called by the wrappers below) */
     void launchVsCode(int idx);
 
-private:
-    void onInstallerFinished(int, QProcess::ExitStatus);
-    void checkWorkerNodeStatus();
-    void checkInternetConnection();
-    void showRestartOptions();
-    void handleInternetStatusChange(WlanStatus newStatus);
-    void autoRestartServices();
-    void performApplicationRestart();
-    void saveStateBeforeRestart();
+private slots:
+    void onNodeStatusChanged(bool online);
+    void onWlanStatusChanged(bool connected);
+    void onJobFinished(const QString &operation, bool success, const QString &message);
     void checkRunningAppSts();
+
+private:
     void updateInstalledList(const QJsonArray&);
+    void initializeMonitoring();
+    void cleanupMonitoring();
 
     QList<TI>             m_items;
     InstalledCheckThread *m_checkThread {nullptr};
-    QTimer               *m_nodeTimer   {nullptr};
-    QTimer               *m_wlanTimer   {nullptr};
     QTimer               *m_stsTimer    {nullptr};
-    QProcess             *m_installer   {nullptr};
-    NodeStatus            m_nodeStatus  {NodeStatus::Unknown};
-    WlanStatus            m_wlanStatus  {WlanStatus::Unknown};
+    
+    // Extracted functionality
+    WlanMonitor          *m_wlanMonitor      {nullptr};
+    AutoRestartManager   *m_autoRestartMgr   {nullptr};
+    K3s::JobManager      *m_jobManager       {nullptr};
+    
+    // Status tracking
+    bool                  m_nodeOnline  {true};
+    bool                  m_wlanOnline  {false};
+    // Node check state
+    bool                  m_nodeCheckInProgress {false};
+    QDateTime             m_lastNodeCheck;
 
     struct StRec { QString id; bool ok; int idx; };
     QList<StRec>          m_last;
@@ -109,58 +110,127 @@ InstalledAsyncBase<TI,TD>::InstalledAsyncBase(QObject *parent)
     if (DK_CONTAINER_ROOT.isEmpty())
         DK_CONTAINER_ROOT = qEnvironmentVariable("DK_CONTAINER_ROOT");
 
-    /* kubectl helper */
-    m_installer = new QProcess(this);
-    m_installer->setProcessChannelMode(QProcess::MergedChannels);
-    connect(m_installer,
-            QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
-            this,&InstalledAsyncBase::onInstallerFinished);
+    /* Initialize job manager */
+    m_jobManager = new K3s::JobManager(this);
+    connect(m_jobManager, &K3s::JobManager::jobFinished,
+            this, &InstalledAsyncBase::onJobFinished);
 
-    // 1) create the helper AFTER the base ctor knows the v-table
+    // Initialize monitoring after the base constructor knows the v-table
     QTimer::singleShot(0, this, [this](){
-        const QString jf = folderRoot() + "installed"
-                        + QString(fileName()).remove("vehicle-") + "s.json";
-        qDebug() << "[InstalledAsyncBase] Watching file:" << jf;
-        m_checkThread = new InstalledCheckThread(static_cast<TD*>(this),
-                                                jf, this);
-        connect(m_checkThread, &InstalledCheckThread::resultReady,
-                static_cast<TD*>(this), &TD::handleResults,
-                Qt::QueuedConnection);
-        m_checkThread->start();
-    });
-
-    /* create node-timer only when requested by subclass  */
-    QTimer::singleShot(100, this, [this]() {
-        if ( this->wantsNodeMonitor() ) {
-            m_nodeTimer = new QTimer(this);
-            connect(m_nodeTimer, &QTimer::timeout,
-                    this, &InstalledAsyncBase<TI,TD>::checkWorkerNodeStatus);
-            m_nodeTimer->start(7'000);
-        }
-    });
-
-    /* create WLAN-timer only when requested by subclass */
-    QTimer::singleShot(200, this, [this]() {
-        if ( this->wantsWlanMonitor() ) {
-            m_wlanTimer = new QTimer(this);
-            connect(m_wlanTimer, &QTimer::timeout,
-                    this, &InstalledAsyncBase<TI,TD>::checkInternetConnection);
-            m_wlanTimer->start(5'000);  // check every 5 seconds
-        }
+        initializeMonitoring();
     });
 
     /* deployment-status timer (always on) */
     m_stsTimer = new QTimer(this);
     connect(m_stsTimer, &QTimer::timeout,
-            this,        &InstalledAsyncBase::checkRunningAppSts);
+            this, &InstalledAsyncBase::checkRunningAppSts);
     m_stsTimer->start(5'000);
 }
 
-/* ------------ installer finished (log) ------------------------ */
+/* ------------ dtor --------------------------------------------- */
 template<class TI,class TD>
-void InstalledAsyncBase<TI,TD>::onInstallerFinished(int c,QProcess::ExitStatus s)
+InstalledAsyncBase<TI,TD>::~InstalledAsyncBase()
 {
-    qDebug() << "[Installer] finished"<<c<<s<<"\n"<<m_installer->readAll();
+    cleanupMonitoring();
+}
+
+/* ------------ initialize monitoring --------------------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::initializeMonitoring()
+{
+    // 1) File monitoring (always needed)
+    const QString jf = folderRoot() + "installed"
+                    + QString(fileName()).remove("vehicle-") + "s.json";
+    qDebug() << "[InstalledAsyncBase] Watching file:" << jf;
+    m_checkThread = new InstalledCheckThread(static_cast<TD*>(this), jf, this);
+    connect(m_checkThread, &InstalledCheckThread::resultReady,
+            static_cast<TD*>(this), &TD::handleResults,
+            Qt::QueuedConnection);
+    m_checkThread->start();
+
+    // 2) WLAN monitoring (if requested)
+    if (wantsWlanMonitor()) {
+        m_wlanMonitor = new WlanMonitor(this);
+        m_wlanMonitor->setCheckInterval(5000); // 5 seconds
+        connect(m_wlanMonitor, &WlanMonitor::connectionStatusChanged,
+                this, &InstalledAsyncBase::onWlanStatusChanged);
+        m_wlanMonitor->startMonitoring();
+        
+        qDebug() << "[InstalledAsyncBase] WLAN monitoring enabled";
+    }
+
+    // 3) Auto-restart functionality (if requested)
+    if (wantsAutoRestart()) {
+        m_autoRestartMgr = new AutoRestartManager(this);
+        m_autoRestartMgr->setWlanMonitor(m_wlanMonitor);
+        m_autoRestartMgr->setJobManager(m_jobManager);
+        
+        qDebug() << "[InstalledAsyncBase] Auto-restart functionality enabled";
+    }
+
+    // 4) Node monitoring (if requested) - With caching to prevent excessive calls
+    if (wantsNodeMonitor()) {
+        auto *nodeTimer = new QTimer(this);
+        nodeTimer->setSingleShot(false);
+        
+        connect(nodeTimer, &QTimer::timeout, this, [this]() {
+            // Skip if a check is already in progress
+            if (m_nodeCheckInProgress) {
+                qDebug() << "[InstalledAsyncBase] Node check already in progress, skipping";
+                return;
+            }
+            
+            // Skip if we checked recently (within last 8 seconds)
+            if (m_lastNodeCheck.isValid() && 
+                m_lastNodeCheck.msecsTo(QDateTime::currentDateTime()) < 8000) {
+                return;
+            }
+            
+            m_nodeCheckInProgress = true;
+            m_lastNodeCheck = QDateTime::currentDateTime();
+            
+            auto *job = m_jobManager->checkNodeReady("vip", 3);
+            
+            connect(job, &Async::JobBase::finished, this, [this, job](bool) {
+                bool ready = job->result();
+                
+                if (ready != m_nodeOnline) {
+                    qDebug() << "[InstalledAsyncBase] Node status changed:" << m_nodeOnline << "->" << ready;
+                    m_nodeOnline = ready;
+                    onNodeStatusChanged(ready);
+                }
+                
+                m_nodeCheckInProgress = false;
+                job->deleteLater();
+            });
+        });
+        
+        nodeTimer->start(15000); // Increased to 15 seconds to reduce load
+        
+        qDebug() << "[InstalledAsyncBase] Node monitoring enabled (15s interval, with caching)";
+    }
+}
+
+/* ------------ cleanup monitoring ------------------------------ */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::cleanupMonitoring()
+{
+    if (m_wlanMonitor) {
+        m_wlanMonitor->stopMonitoring();
+    }
+}
+
+/* ------------ status accessors -------------------------------- */
+template<class TI,class TD>
+bool InstalledAsyncBase<TI,TD>::workerNodeOnline() const
+{
+    return m_nodeOnline;
+}
+
+template<class TI,class TD>
+bool InstalledAsyncBase<TI,TD>::wlanConnected() const
+{
+    return m_wlanOnline;
 }
 
 /* ------------ DB reload --------------------------------------- */
@@ -205,22 +275,23 @@ void InstalledAsyncBase<TI,TD>::updateInstalledList(const QJsonArray &arr)
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::fileChanged(const QString&)
 {
-    auto *job = new Async::Job<QJsonArray>([=](){
+    // Create job without parent to avoid cross-thread issues
+    auto *job = new Async::Job<QJsonArray>([=]() -> QJsonArray {
         QThread::msleep(300);
         DataManager dm; 
         qDebug() << "[InstalledAsyncBase] fileChanged, reloading from DB: " << dbKey();
         return dm.load(dbKey());
-    }, this);
-
-    connect(job,&Async::JobBase::finished,this,[this,job](bool){
+    }); // No parent
+    
+    connect(job, &Async::JobBase::finished, this, [this, job](bool) {
         updateInstalledList(job->result());
         job->deleteLater();
     });
 }
 
-/* shared editor launcher (called by the wrappers below) */
+/* shared editor launcher */
 template<class TI,class TD>
-void InstalledAsyncBase<TI,TD>:: launchVsCode(int idx)
+void InstalledAsyncBase<TI,TD>::launchVsCode(int idx)
 {
     if (idx < 0 || idx >= m_items.size()) return;
     const QString folder = folderRoot() + m_items[idx].id;
@@ -239,65 +310,30 @@ void InstalledAsyncBase<TI,TD>::executeServices(
 {
     if (idx < 0 || idx >= m_items.size()) return;
 
-    const QStringList cmds = subscribe
-        ? QStringList{ QString("kubectl apply -f %1").arg(deploymentYaml(id)) }
-        : QStringList{ QString("kubectl delete -f %1 --ignore-not-found").arg(deploymentYaml(id)) };
+    // Prepare deployment info
+    K3s::JobManager::DeploymentInfo deployInfo;
+    deployInfo.id = id;
+    deployInfo.name = m_items[idx].name;
+    deployInfo.deploymentYaml = deploymentYaml(id);
+    deployInfo.subscribe = subscribe;
 
-    auto *chain = new Async::Chain(this);
-
-    /* ------------------------------------------------------------------
-     *  Shared state that every lambda can read/write
-     * ----------------------------------------------------------------*/
-    auto kubectlOk = std::make_shared<bool>(false);
-
-    /* step-0  : optional node-ready check (unchanged) */
-    chain->add([subscribe](){
-        if (!subscribe) return true;
-        bool ready=false; try{ ready = K3s::Installer::nodeReady("vip",5);}catch(...){}
-        if (!ready)
-            NOTIFY_WARNING("Deployment",
-                           "Worker node not ready. Deployment may fail.");
-        return true;
-    });
-
-    /* step-1  : run kubectl and remember the result in our shared bool  */
-    chain->add([cmds, kubectlOk](){
-        bool ok = false;
-        QMetaObject::invokeMethod(qApp,[&](){
-            K3s::Installer inst; QEventLoop l;
-            QObject::connect(&inst,&K3s::Installer::finished,&l,
-                             [&](bool b){ ok = b; l.quit();});
-            inst.queueAndRun(cmds); l.exec();
-        }, Qt::BlockingQueuedConnection);
-
-        *kubectlOk = ok;                 // <-- store the result here
-        if(!ok) {
-            qWarning() << "[InstalledAsyncBase::executeServices] kubectl command failed.";
+    // Use job manager for deployment
+    auto *job = m_jobManager->deployService(deployInfo);
+    
+    connect(job, &Async::JobBase::finished, this, [this, idx, id, subscribe, job](bool) {
+        K3s::JobManager::JobResult result = job->result();
+        
+        if (result.success) {
+            // Update local model
+            m_items[idx].isSubscribed = subscribe;
+            m_checkThread->triggerCheckAppStart(id, m_items[idx].name);
+            m_checkThread->notifyState(true);
+        } else {
+            m_checkThread->notifyState(false);
         }
-        return ok;
+        
+        job->deleteLater();
     });
-
-    /* step-2  : update local model &     start docker-ps watcher       */
-    chain->add([this,idx,id,subscribe](){
-        m_items[idx].isSubscribed = subscribe;
-        m_checkThread->triggerCheckAppStart(id, m_items[idx].name);
-        return true;
-    });
-
-    /* step-3  : inform the CheckThread about the kubectl result        */
-    chain->add([this, kubectlOk](){
-        m_checkThread->notifyState(*kubectlOk);
-        return true;
-    });
-
-    /* finished signal (unchanged) */
-    connect(chain,&Async::Chain::finished,this,
-            [id,subscribe](bool ok){
-        const QString act = subscribe ? "deployed" : "stopped";
-        if(ok) NOTIFY_SUCCESS("Deployment", QString("Serv.Id '%1' %2 has been triggered").arg(id,act));
-        else   NOTIFY_ERROR  ("Deployment", QString("Serv.Id %1 '%2' has been triggered").arg(act,id));
-    });
-    chain->start();
 }
 
 /* ------------ remove ------------------------------------------ */
@@ -309,7 +345,8 @@ void InstalledAsyncBase<TI,TD>::removeServices(int idx)
     const QString id   = m_items[idx].id;
     const QString yaml = deploymentYaml(id);
 
-    auto *chain = new Async::Chain(this);
+    // Create chain without parent to avoid cross-thread issues
+    auto *chain = new Async::Chain();
 
     /* shared state between steps  -------------------------------- */
     auto ok      = std::make_shared<bool>(true);
@@ -328,50 +365,49 @@ void InstalledAsyncBase<TI,TD>::removeServices(int idx)
             *ok      = false;
             *errText = QString("DB error: %1").arg(e.what());
         }
-        return true;                     // never abort chain
+        return true;
     });
 
-    /* step-1 : run kubectl delete -------------------------------- */
+    /* step-1 : use job manager for removal ----------------------- */
     chain->add([=](){
-        try {
-            bool cmdOk = false;
-            QMetaObject::invokeMethod(qApp,[&](){
-                K3s::Installer inst;  QEventLoop loop;
-                const QStringList cmd{
-                    QString("kubectl delete -f %1 --ignore-not-found").arg(yaml) };
-                QObject::connect(&inst,&K3s::Installer::finished,&loop,
-                                 [&](bool b){ cmdOk = b; loop.quit();});
-                inst.queueAndRun(cmd);  loop.exec();
-            }, Qt::BlockingQueuedConnection);
-
-            if (!cmdOk) {
-                *ok      = false;
-                *errText = "kubectl delete failed";
+        auto *job = m_jobManager->removeService(id, yaml);
+        QEventLoop loop;
+        
+        connect(job, &Async::JobBase::finished, &loop, [&](bool) {
+            K3s::JobManager::JobResult result = job->result();
+            if (!result.success) {
+                *ok = false;
+                *errText = result.errorMessage;
             }
-        } catch (const std::exception &e) {
-            *ok      = false;
-            *errText = QString("kubectl exception: %1").arg(e.what());
-        }
+            loop.quit();
+        });
+        
+        loop.exec();
+        job->deleteLater();
         return true;
     });
 
     /* step-2 : update local list --------------------------------- */
-    chain->add([this,idx](){
-        if (idx < m_items.size())
-            m_items.removeAt(idx);
+    chain->add([this, idx](){
+        QMetaObject::invokeMethod(qApp, [this, idx]() {
+            if (idx < m_items.size())
+                m_items.removeAt(idx);
+        }, Qt::BlockingQueuedConnection);
         return true;
     });
 
     /* step-3 : show result and refresh model --------------------- */
-    chain->add([this,id,ok,errText](){
-        if (*ok) {
-            NOTIFY_SUCCESS("Service", QString("%1 removed").arg(id));
-            initInstalledFromDB();                // reload UI model
-        } else {
-            NOTIFY_ERROR("Service",
-                         QString("Failed to remove %1. %2")
-                             .arg(id,*errText));
-        }
+    chain->add([this, id, ok, errText](){
+        QMetaObject::invokeMethod(qApp, [this, id, ok, errText]() {
+            if (*ok) {
+                NOTIFY_SUCCESS("Service", QString("%1 removed").arg(id));
+                initInstalledFromDB();
+            } else {
+                NOTIFY_ERROR("Service",
+                             QString("Failed to remove %1. %2")
+                                 .arg(id, *errText));
+            }
+        }, Qt::QueuedConnection);
         return true;
     });
 
@@ -380,599 +416,73 @@ void InstalledAsyncBase<TI,TD>::removeServices(int idx)
     chain->start();
 }
 
-/* ------------ node monitor ------------------------------------ */
-template<class TI,class TD>
-void InstalledAsyncBase<TI,TD>::checkWorkerNodeStatus()
-{
-    bool ok=false; try{ ok=K3s::Installer::nodeReady("vip",5);}catch(...){}
-    auto st = ok?NodeStatus::Online:NodeStatus::Offline;
-    if(st==m_nodeStatus) return;
-    m_nodeStatus=st;
-    if(ok) NOTIFY_SUCCESS("Node","VIP (Vehicle Integration Platform) ~ ONLINE");
-    else   NOTIFY_WARNING("Node","VIP (Vehicle Integration Platform) ~ OFFLINE");
-    static_cast<TD*>(this)->workerNodeStatusChanged(ok);
-}
-
-/* ------------ internet connection monitor --------------------- */
-template<class TI,class TD>
-void InstalledAsyncBase<TI,TD>::checkInternetConnection()
-{
-    // Create a network access manager if it doesn't exist
-    static QNetworkAccessManager* networkManager = nullptr;
-    if (!networkManager) {
-        networkManager = new QNetworkAccessManager(this);
-    }
-
-    // Try multiple endpoints for better reliability
-    static QStringList testUrls = {
-        // "http://8.8.8.8",           // Google DNS (IP-based, no DNS lookup needed)
-        // "http://1.1.1.1",           // Cloudflare DNS (IP-based)
-        "http://www.google.com",    // Domain-based as fallback
-        // "http://httpbin.org/get"    // Alternative test endpoint
-    };
-    
-    static int currentUrlIndex = 0;
-    QString testUrl = testUrls[currentUrlIndex % testUrls.size()];
-    currentUrlIndex++;
-
-    // Fix: Use brace initialization to avoid most vexing parse
-    QUrl url{testUrl};
-    QNetworkRequest request{url};
-    
-    request.setRawHeader("User-Agent", "sdv-runtime/1.0");
-    
-    // Qt6 redirect policy
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, 
-                        QNetworkRequest::NoLessSafeRedirectPolicy);
-    
-    // Shorter timeout for faster detection
-    request.setTransferTimeout(3000); // 3 seconds timeout
-    
-    QNetworkReply* reply = networkManager->head(request);
-    
-    // Handle the reply
-    connect(reply, &QNetworkReply::finished, this, [this, reply, testUrl]() {
-        WlanStatus newStatus = WlanStatus::Disconnected;
-        
-        if (reply->error() == QNetworkReply::NoError || 
-            reply->error() == QNetworkReply::ContentNotFoundError) {
-            // Success or 404 both indicate internet connectivity
-            newStatus = WlanStatus::Connected;
-            // qDebug() << "[InternetCheck] Connection successful via:" << testUrl;
-        } else {
-            // qDebug() << "[InternetCheck] Connection failed via" << testUrl 
-            //          << "Error:" << reply->error() << reply->errorString();
-            newStatus = WlanStatus::Disconnected;
-        }
-        
-        // Handle status change
-        this->handleInternetStatusChange(newStatus);
-        
-        reply->deleteLater();
-    });
-    
-    // Handle timeout and errors
-    connect(reply, &QNetworkReply::errorOccurred, this, 
-            [this, reply, testUrl](QNetworkReply::NetworkError error) {
-        qDebug() << "[InternetCheck] Network error via" << testUrl 
-                 << "Error:" << error << reply->errorString();
-        
-        // Don't immediately mark as disconnected on single failure
-        // Let the finished handler deal with it
-    });
-}
-
-/* ------------ handle internet status change ------------------- */
-template<class TI,class TD>
-void InstalledAsyncBase<TI,TD>::handleInternetStatusChange(WlanStatus newStatus)
-{
-    if (newStatus == m_wlanStatus) return; // No change
-    
-    WlanStatus oldStatus = m_wlanStatus;
-    m_wlanStatus = newStatus;
-    
-    if (newStatus == WlanStatus::Connected) {
-        NOTIFY_SUCCESS("Connection", "Internet connection restored");
-        qDebug() << "[InternetCheck] Internet connection restored";
-        
-        // Only trigger restart options if we were previously disconnected
-        if (oldStatus == WlanStatus::Disconnected) {
-            // Auto-restart both services when internet comes back
-            QTimer::singleShot(2000, this, [this]() {
-                this->autoRestartServices();
-            });
-        }
-    } else {
-        NOTIFY_WARNING("Connection", "Internet connection lost");
-        qDebug() << "[InternetCheck] Internet connection lost";
-    }
-    
-    // Notify derived class about the status change
-    // static_cast<TD*>(this)->internetConnectionStatusChanged(newStatus == WlanStatus::Connected);
-}
-
-/* ------------ auto restart services when internet restored ---- */
-template<class TI,class TD>
-void InstalledAsyncBase<TI,TD>::autoRestartServices()
-{
-    static bool restartInProgress = false;
-    static uint32_t restartCycleCnt = 3;
-    if (restartInProgress) {
-        qDebug() << "[AutoRestart] Restart already in progress, skipping";
-        return;
-    }
-    if (--restartCycleCnt == 0) {
-        NOTIFY_WARNING("Auto Restart", "Restart already reach the threshold");
-        qDebug() << "[AutoRestart] Restart already reach the threshold";
-        return;
-    }
-    
-    restartInProgress = true;
-    
-    NOTIFY_INFO("Auto Restart", "Auto-restarting services due to internet restoration...");
-    qDebug() << "[AutoRestart] Starting auto-restart sequence";
-    
-    auto *chain = new Async::Chain(this);
-    auto sdvSuccess = std::make_shared<bool>(false);
-    auto errorMsg = std::make_shared<QString>();
-    auto deploymentExists = std::make_shared<bool>(false);
-
-    // Step 1: Check if SDV runtime deployment exists
-    chain->add([this, deploymentExists, errorMsg]() {
-        try {
-            qDebug() << "[AutoRestart] Step 1: Checking if SDV deployment exists";
-            
-            bool exists = false;
-            QMetaObject::invokeMethod(qApp, [&]() {
-                K3s::Installer inst;
-                QEventLoop loop;
-                const QStringList checkCmd{
-                    "kubectl get deployment sdv-runtime -n default --no-headers"
-                };
-                QObject::connect(&inst, &K3s::Installer::finished, &loop,
-                               [&](bool b) { exists = b; loop.quit(); });
-                inst.queueAndRun(checkCmd);
-                loop.exec();
-            }, Qt::BlockingQueuedConnection);
-
-            *deploymentExists = exists;
-            if (!exists) {
-                qDebug() << "[AutoRestart] SDV deployment not found, will skip restart";
-            } else {
-                qDebug() << "[AutoRestart] SDV deployment found, proceeding with restart";
-            }
-            return true;
-        } catch (const std::exception &e) {
-            *errorMsg = QString("Deployment check error: %1").arg(e.what());
-            qDebug() << "[AutoRestart] Exception during deployment check:" << e.what();
-            return true; // Continue anyway
-        }
-    });
-
-    // Step 2: Scale down deployment to 0 replicas (force stop)
-    chain->add([this, deploymentExists, sdvSuccess, errorMsg]() {
-        if (!*deploymentExists) {
-            qDebug() << "[AutoRestart] Step 2: Skipping scale down - deployment doesn't exist";
-            *sdvSuccess = true;
-            return true;
-        }
-
-        try {
-            qDebug() << "[AutoRestart] Step 2: Scaling down deployment to 0 replicas";
-            
-            bool scaleOk = false;
-            QMetaObject::invokeMethod(qApp, [&]() {
-                K3s::Installer inst;
-                QEventLoop loop;
-                const QStringList scaleCmd{
-                    "kubectl scale deployment sdv-runtime --replicas=0 -n default"
-                };
-                QObject::connect(&inst, &K3s::Installer::finished, &loop,
-                               [&](bool b) { scaleOk = b; loop.quit(); });
-                inst.queueAndRun(scaleCmd);
-                loop.exec();
-            }, Qt::BlockingQueuedConnection);
-
-            if (!scaleOk) {
-                *errorMsg = "Failed to scale down deployment";
-                qDebug() << "[AutoRestart] Failed to scale down deployment";
-                return true; // Continue anyway, maybe it's already down
-            } else {
-                qDebug() << "[AutoRestart] Successfully scaled down deployment";
-            }
-            
-            return true;
-        } catch (const std::exception &e) {
-            *errorMsg = QString("Scale down error: %1").arg(e.what());
-            qDebug() << "[AutoRestart] Exception during scale down:" << e.what();
-            return true; // Continue anyway
-        }
-    });
-
-    // Step 3: Wait for pods to terminate completely
-    chain->add([this, deploymentExists, errorMsg]() {
-        if (!*deploymentExists) {
-            qDebug() << "[AutoRestart] Step 3: Skipping pod termination wait - deployment doesn't exist";
-            return true;
-        }
-
-        try {
-            qDebug() << "[AutoRestart] Step 3: Waiting for pods to terminate";
-            
-            // Wait up to 30 seconds for pods to terminate
-            for (int i = 0; i < 30; ++i) {
-                bool podsRunning = false;
-                QMetaObject::invokeMethod(qApp, [&]() {
-                    K3s::Installer inst;
-                    QEventLoop loop;
-                    const QStringList checkCmd{
-                        "kubectl get pods -l app=sdv-runtime -n default --no-headers"
-                    };
-                    QObject::connect(&inst, &K3s::Installer::finished, &loop,
-                                   [&](bool b) { podsRunning = b; loop.quit(); });
-                    inst.queueAndRun(checkCmd);
-                    loop.exec();
-                }, Qt::BlockingQueuedConnection);
-
-                if (!podsRunning) {
-                    qDebug() << "[AutoRestart] All pods terminated after" << i << "seconds";
-                    break;
-                }
-                
-                qDebug() << "[AutoRestart] Waiting for pods to terminate... (" << (i+1) << "/30)";
-                QThread::msleep(1000); // Wait 1 second
-            }
-            
-            return true;
-        } catch (const std::exception &e) {
-            *errorMsg = QString("Pod termination wait error: %1").arg(e.what());
-            qDebug() << "[AutoRestart] Exception during pod termination wait:" << e.what();
-            return true; // Continue anyway
-        }
-    });
-
-    // Step 4: Check and clear any stuck resources
-    chain->add([this, deploymentExists, errorMsg]() {
-        if (!*deploymentExists) {
-            qDebug() << "[AutoRestart] Step 4: Skipping resource cleanup - deployment doesn't exist";
-            return true;
-        }
-
-        try {
-            qDebug() << "[AutoRestart] Step 4: Cleaning up any stuck resources";
-            
-            // Force delete any remaining pods
-            QMetaObject::invokeMethod(qApp, [&]() {
-                K3s::Installer inst;
-                QEventLoop loop;
-                const QStringList cleanupCmd{
-                    "kubectl delete pods -l app=sdv-runtime -n default --force --grace-period=0"
-                };
-                QObject::connect(&inst, &K3s::Installer::finished, &loop,
-                               [&](bool) { loop.quit(); }); // Don't care about result
-                inst.queueAndRun(cleanupCmd);
-                loop.exec();
-            }, Qt::BlockingQueuedConnection);
-
-            qDebug() << "[AutoRestart] Resource cleanup completed";
-            return true;
-        } catch (const std::exception &e) {
-            qDebug() << "[AutoRestart] Exception during resource cleanup:" << e.what();
-            return true; // Continue anyway
-        }
-    });
-
-    // Step 5: Wait a bit more to ensure clean state
-    chain->add([this, deploymentExists]() {
-        if (!*deploymentExists) {
-            qDebug() << "[AutoRestart] Step 5: Skipping wait - deployment doesn't exist";
-            return true;
-        }
-
-        qDebug() << "[AutoRestart] Step 5: Waiting for clean state";
-        QThread::msleep(3000); // Wait 3 seconds for clean state
-        return true;
-    });
-
-    // Step 6: Scale back up to 1 replica (fresh start)
-    chain->add([this, deploymentExists, sdvSuccess, errorMsg]() {
-        if (!*deploymentExists) {
-            qDebug() << "[AutoRestart] Step 6: Skipping scale up - deployment doesn't exist";
-            *sdvSuccess = true;
-            return true;
-        }
-
-        try {
-            qDebug() << "[AutoRestart] Step 6: Scaling up deployment to 1 replica";
-            
-            bool scaleOk = false;
-            QMetaObject::invokeMethod(qApp, [&]() {
-                K3s::Installer inst;
-                QEventLoop loop;
-                const QStringList scaleCmd{
-                    "kubectl scale deployment sdv-runtime --replicas=1 -n default"
-                };
-                QObject::connect(&inst, &K3s::Installer::finished, &loop,
-                               [&](bool b) { scaleOk = b; loop.quit(); });
-                inst.queueAndRun(scaleCmd);
-                loop.exec();
-            }, Qt::BlockingQueuedConnection);
-
-            *sdvSuccess = scaleOk;
-            if (!scaleOk) {
-                *errorMsg = "Failed to scale up deployment";
-                qDebug() << "[AutoRestart] Failed to scale up deployment";
-            } else {
-                qDebug() << "[AutoRestart] Successfully scaled up deployment";
-            }
-            
-            return true;
-        } catch (const std::exception &e) {
-            *errorMsg = QString("Scale up error: %1").arg(e.what());
-            qDebug() << "[AutoRestart] Exception during scale up:" << e.what();
-            return true;
-        }
-    });
-
-    // Step 7: Wait for new pods to be ready
-    chain->add([this, deploymentExists, sdvSuccess, errorMsg]() {
-        if (!*deploymentExists || !*sdvSuccess) {
-            qDebug() << "[AutoRestart] Step 7: Skipping readiness check";
-            return true;
-        }
-
-        try {
-            qDebug() << "[AutoRestart] Step 7: Waiting for new pods to be ready";
-            
-            // Wait up to 60 seconds for pods to be ready
-            bool podsReady = false;
-            for (int i = 0; i < 60; ++i) {
-                QMetaObject::invokeMethod(qApp, [&]() {
-                    K3s::Installer inst;
-                    QEventLoop loop;
-                    const QStringList checkCmd{
-                        "kubectl get pods -l app=sdv-runtime -n default -o jsonpath='{.items[*].status.phase}'"
-                    };
-                    QObject::connect(&inst, &K3s::Installer::finished, &loop,
-                                   [&](bool b) { 
-                                       // Check if we got "Running" status
-                                       podsReady = b;
-                                       loop.quit(); 
-                                   });
-                    inst.queueAndRun(checkCmd);
-                    loop.exec();
-                }, Qt::BlockingQueuedConnection);
-
-                if (podsReady) {
-                    qDebug() << "[AutoRestart] New pods are ready after" << i << "seconds";
-                    break;
-                }
-                
-                if (i % 5 == 0) { // Log every 5 seconds
-                    qDebug() << "[AutoRestart] Waiting for pods to be ready... (" << (i+1) << "/60)";
-                }
-                QThread::msleep(1000); // Wait 1 second
-            }
-            
-            if (!podsReady) {
-                *errorMsg += " (Warning: Pods may not be fully ready)";
-                qDebug() << "[AutoRestart] Warning: Pods may not be fully ready after 60 seconds";
-            }
-            
-            return true;
-        } catch (const std::exception &e) {
-            *errorMsg += QString(" Pod readiness error: %1").arg(e.what());
-            qDebug() << "[AutoRestart] Exception during pod readiness check:" << e.what();
-            return true;
-        }
-    });
-
-    // Step 8: Wait before restarting application
-    chain->add([this]() {
-        qDebug() << "[AutoRestart] Step 8: Waiting before app restart";
-        QThread::msleep(5000); // Wait 5 seconds for SDV to stabilize
-        return true;
-    });
-
-    // Step 9: Restart this application
-    // chain->add([this]() {
-    //     qDebug() << "[AutoRestart] Step 9: Restarting sdv-runtime application";
-    //     this->performApplicationRestart();
-    //     return true;
-    // });
-
-    // Cleanup and report results
-    connect(chain, &Async::Chain::finished, this, [deploymentExists, sdvSuccess, errorMsg](bool) {
-        restartInProgress = false;
-        
-        if (!*deploymentExists) {
-            NOTIFY_INFO("Auto Restart", "SDV deployment not found, only restarting application");
-            qDebug() << "[AutoRestart] Restart sequence completed - SDV deployment not found";
-        } else if (*sdvSuccess) {
-            NOTIFY_SUCCESS("Auto Restart", "Services restart sequence completed successfully");
-            qDebug() << "[AutoRestart] Restart sequence completed successfully";
-        } else {
-            NOTIFY_WARNING("Auto Restart", 
-                          QString("Restart completed with issues: %1").arg(*errorMsg));
-            qDebug() << "[AutoRestart] Restart completed with issues:" << *errorMsg;
-        }
-    });
-
-    connect(chain, &Async::Chain::finished, chain, &QObject::deleteLater);
-    chain->start();
-}
-
-/* ------------ perform application restart --------------------- */
-template<class TI,class TD>
-void InstalledAsyncBase<TI,TD>::performApplicationRestart()
-{
-    qDebug() << "[AppRestart] Saving state and preparing restart";
-    
-    // Save current state
-    this->saveStateBeforeRestart();
-    
-    // Try multiple restart methods
-    QString appPath = QCoreApplication::applicationFilePath();
-    QStringList args = QCoreApplication::arguments();
-    args.removeFirst(); // Remove program name
-    
-    qDebug() << "[AppRestart] App path:" << appPath;
-    qDebug() << "[AppRestart] Args:" << args;
-    
-    // Method 1: Try systemctl restart (most reliable for service)
-    if (QProcess::execute("systemctl", QStringList() << "is-active" << "sdv-runtime") == 0) {
-        qDebug() << "[AppRestart] Using systemctl restart";
-        QProcess::startDetached("systemctl", QStringList() << "restart" << "sdv-runtime");
-        QTimer::singleShot(1000, []() { QCoreApplication::quit(); });
-        return;
-    }
-    
-    // Method 2: Direct executable restart
-    qDebug() << "[AppRestart] Using direct executable restart";
-    if (QProcess::startDetached(appPath, args)) {
-        QTimer::singleShot(500, []() { QCoreApplication::quit(); });
-    } else {
-        // Method 3: Force exit and let external process manager restart
-        qDebug() << "[AppRestart] Force exit - relying on external restart";
-        QTimer::singleShot(500, []() { 
-            QCoreApplication::exit(42); // Special exit code for restart
-        });
-    }
-}
-
-/* ------------ manual restart methods (enhanced) --------------- */
+/* ------------ restart methods (delegate to AutoRestartManager) */
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::restartSdvRuntime()
 {
-    if (m_wlanStatus != WlanStatus::Connected) {
-        NOTIFY_WARNING("Restart", "Internet connection required for restart");
-        return;
+    if (m_autoRestartMgr) {
+        m_autoRestartMgr->restartSdvRuntime();
+    } else {
+        NOTIFY_WARNING("Restart", "Auto-restart manager not available");
     }
-
-    NOTIFY_INFO("SDV Runtime", "Manually restarting SDV runtime deployment...");
-    qDebug() << "[ManualRestart] Starting manual SDV restart";
-    
-    auto *chain = new Async::Chain(this);
-    auto success = std::make_shared<bool>(false);
-    auto errorMsg = std::make_shared<QString>();
-
-    chain->add([success, errorMsg]() {
-        try {
-            bool ok = false;
-            QMetaObject::invokeMethod(qApp, [&]() {
-                K3s::Installer inst;
-                QEventLoop loop;
-                const QStringList cmd{
-                    "kubectl rollout restart deployment/sdv-runtime -n default"
-                };
-                QObject::connect(&inst, &K3s::Installer::finished, &loop,
-                               [&](bool b) { ok = b; loop.quit(); });
-                inst.queueAndRun(cmd);
-                loop.exec();
-            }, Qt::BlockingQueuedConnection);
-
-            *success = ok;
-            if (!ok) {
-                *errorMsg = "kubectl rollout restart failed";
-            }
-            return true;
-        } catch (const std::exception &e) {
-            *errorMsg = QString("Restart error: %1").arg(e.what());
-            return true;
-        }
-    });
-
-    connect(chain, &Async::Chain::finished, this, [success, errorMsg](bool) {
-        if (*success) {
-            NOTIFY_SUCCESS("SDV Runtime", "SDV runtime deployment restart initiated");
-        } else {
-            NOTIFY_ERROR("SDV Runtime", 
-                        QString("Failed to restart SDV runtime: %1").arg(*errorMsg));
-        }
-    });
-
-    connect(chain, &Async::Chain::finished, chain, &QObject::deleteLater);
-    chain->start();
 }
 
-/* ------------ manual application restart ---------------------- */
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::restartApplication()
 {
-    if (m_wlanStatus != WlanStatus::Connected) {
-        NOTIFY_WARNING("Restart", "Internet connection required for restart");
-        return;
-    }
-
-    NOTIFY_INFO("Application", "Manually restarting sdv-runtime application in 3 seconds...");
-    qDebug() << "[ManualRestart] Manual application restart requested";
-    
-    QTimer::singleShot(3000, this, [this]() {
-        this->performApplicationRestart();
-    });
-}
-
-/* ------------ save state before restart ----------------------- */
-template<class TI,class TD>
-void InstalledAsyncBase<TI,TD>::saveStateBeforeRestart()
-{
-    try {
-        DataManager dm;
-        QJsonArray currentState;
-        
-        for (const auto& item : m_items) {
-            QJsonObject obj;
-            obj["id"] = item.id;
-            obj["name"] = item.name;
-            obj["author"] = item.author;
-            obj["rating"] = item.rating;
-            obj["thumbnail"] = item.iconPath;
-            obj["subscribed"] = item.isSubscribed;
-            currentState.append(obj);
-        }
-        
-        // Add timestamp
-        QJsonObject metadata;
-        metadata["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
-        metadata["reason"] = "auto_restart_internet_restored";
-        currentState.append(metadata);
-        
-        dm.save(dbKey() + "_restart_backup", currentState);
-        qDebug() << "[StateBackup] State saved before restart";
-        
-    } catch (const std::exception &e) {
-        qDebug() << "[StateBackup] Failed to save state:" << e.what();
+    if (m_autoRestartMgr) {
+        m_autoRestartMgr->restartApplication();
+    } else {
+        NOTIFY_WARNING("Restart", "Auto-restart manager not available");
     }
 }
 
-/* ------------ force restart both (emergency option) ----------- */
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::forceRestartBoth()
 {
-    if (m_wlanStatus != WlanStatus::Connected) {
-        NOTIFY_WARNING("Restart", "Internet connection required for restart");
-        return;
+    if (m_autoRestartMgr) {
+        m_autoRestartMgr->forceRestartBoth();
+    } else {
+        NOTIFY_WARNING("Restart", "Auto-restart manager not available");
     }
+}
 
-    NOTIFY_WARNING("Force Restart", "Force restarting both SDV runtime and application...");
+/* ------------ status change handlers -------------------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::onNodeStatusChanged(bool online)
+{
+    if (online) {
+        NOTIFY_SUCCESS("Node","VIP (Vehicle Integration Platform) ~ ONLINE");
+    } else {
+        NOTIFY_WARNING("Node","VIP (Vehicle Integration Platform) ~ OFFLINE");
+    }
+    static_cast<TD*>(this)->workerNodeStatusChanged(online);
+}
+
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::onWlanStatusChanged(bool connected)
+{
+    bool wasConnected = m_wlanOnline;
+    m_wlanOnline = connected;
     
-    auto *chain = new Async::Chain(this);
+    // Only notify if status actually changed
+    if (wasConnected != connected) {
+        if (connected) {
+            NOTIFY_SUCCESS("Internet", "Connection restored - auto-restart may begin");
+            qDebug() << "[InstalledAsyncBase] Internet connection restored";
+        } else {
+            NOTIFY_WARNING("Internet", "Connection lost - services may be affected");
+            qDebug() << "[InstalledAsyncBase] Internet connection lost";
+        }
+    }
+}
 
-    // Step 1: Restart SDV runtime
-    chain->add([this]() {
-        this->restartSdvRuntime();
-        QThread::msleep(5000); // Wait for SDV restart to begin
-        return true;
-    });
-
-    // Step 2: Restart application
-    // chain->add([this]() {
-    //     this->restartApplication();
-    //     return true;
-    // });
-
-    connect(chain, &Async::Chain::finished, chain, &QObject::deleteLater);
-    chain->start();
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::onJobFinished(const QString &operation, bool success, const QString &message)
+{
+    qDebug() << "[InstalledAsyncBase] Job finished:" << operation 
+             << "Success:" << success << "Message:" << message;
+    // Additional handling can be added here if needed
 }
 
 /* ------------ deployment monitor ------------------------------ */
@@ -980,14 +490,25 @@ template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::checkRunningAppSts()
 {
     if(m_items.isEmpty()) return;
-    auto *chain=new Async::Chain(this);
+    
+    auto *chain = new Async::Chain(this);
 
     chain->add([this](){
         m_last.clear();
-        for(int i=0;i<m_items.size();++i){
-            bool ok=false;
-            try{ ok=K3s::Installer::deploymentAvailable(m_items[i].id,5);}catch(...){}
-            m_last.push_back({m_items[i].id,ok,i});
+        for(int i = 0; i < m_items.size(); ++i) {
+            auto *job = m_jobManager->checkDeploymentAvailable(m_items[i].id, 5);
+            QEventLoop loop;
+            bool available = false;
+            
+            connect(job, &Async::JobBase::finished, &loop, [&](bool) {
+                available = job->result();
+                loop.quit();
+            });
+            
+            loop.exec();
+            job->deleteLater();
+            
+            m_last.push_back({m_items[i].id, available, i});
         }
         return true;
     });
@@ -1001,5 +522,6 @@ void InstalledAsyncBase<TI,TD>::checkRunningAppSts()
         return true;
     });
 
+    connect(chain, &Async::Chain::finished, chain, &QObject::deleteLater);
     chain->start();
 }

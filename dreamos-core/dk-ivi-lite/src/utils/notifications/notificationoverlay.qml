@@ -25,18 +25,18 @@ Item {
     
     // FIXED: Better initialization with retry mechanism
     Component.onCompleted: {
-        console.log("[NotificationOverlay] Component completed")
-        console.log("[NotificationOverlay] notificationManagerInstance:", notificationManagerInstance)
-        console.log("[NotificationOverlay] Parent:", parent)
-        console.log("[NotificationOverlay] Visible:", visible)
-        console.log("[NotificationOverlay] Z:", z)
+        // console.log("[NotificationOverlay] Component completed")
+        // console.log("[NotificationOverlay] notificationManagerInstance:", notificationManagerInstance)
+        // console.log("[NotificationOverlay] Parent:", parent)
+        // console.log("[NotificationOverlay] Visible:", visible)
+        // console.log("[NotificationOverlay] Z:", z)
         
         // Connect to the global notification manager
         if (notificationManagerInstance) {
-            console.log("[NotificationOverlay] Connecting to manager immediately...")
+            // console.log("[NotificationOverlay] Connecting to manager immediately...")
             connectToManager()
         } else {
-            console.log("[NotificationOverlay] No notificationManagerInstance, waiting...")
+            // console.log("[NotificationOverlay] No notificationManagerInstance, waiting...")
             
             // Try multiple times with increasing delays
             var attempts = 0
@@ -44,10 +44,10 @@ Item {
             
             function tryConnect() {
                 attempts++
-                console.log("[NotificationOverlay] Connection attempt", attempts, "of", maxAttempts)
+                // console.log("[NotificationOverlay] Connection attempt", attempts, "of", maxAttempts)
                 
                 if (notificationManagerInstance) {
-                    console.log("[NotificationOverlay] Found notificationManagerInstance on attempt", attempts)
+                    // console.log("[NotificationOverlay] Found notificationManagerInstance on attempt", attempts)
                     connectToManager()
                     return
                 }
@@ -55,7 +55,7 @@ Item {
                 if (attempts < maxAttempts) {
                     Qt.callLater(tryConnect, attempts * 100)
                 } else {
-                    console.log("[NotificationOverlay] ERROR: Failed to find notificationManagerInstance after", maxAttempts, "attempts")
+                    // console.log("[NotificationOverlay] ERROR: Failed to find notificationManagerInstance after", maxAttempts, "attempts")
                 }
             }
             
@@ -66,12 +66,12 @@ Item {
     // FIXED: Enhanced connection manager
     function connectToManager() {
         if (!notificationManagerInstance) {
-            console.log("[NotificationOverlay] ERROR: notificationManagerInstance is null in connectToManager")
+            // console.log("[NotificationOverlay] ERROR: notificationManagerInstance is null in connectToManager")
             return
         }
         
-        console.log("[NotificationOverlay] Connecting to notification manager...")
-        console.log("[NotificationOverlay] Manager object:", notificationManagerInstance)
+        // console.log("[NotificationOverlay] Connecting to notification manager...")
+        // console.log("[NotificationOverlay] Manager object:", notificationManagerInstance)
         
         try {
             // Connect to notification signals
@@ -81,28 +81,28 @@ Item {
             notificationManagerInstance.allNotificationsDismissed.connect(handleAllDismissed)
             notificationManagerInstance.notificationExtended.connect(handleNotificationExtended)
             
-            console.log("[NotificationOverlay] Successfully connected all signals")
+            // console.log("[NotificationOverlay] Successfully connected all signals")
             
             // Test connection by triggering a notification
             // Qt.callLater(function() {
-            //     console.log("[NotificationOverlay] Testing connection with startup notification...")
+            //     // console.log("[NotificationOverlay] Testing connection with startup notification...")
             //     notificationManagerInstance.success("System Ready", "Notification system connected successfully")
             // }, 500)
             
         } catch (error) {
-            console.log("[NotificationOverlay] ERROR connecting signals:", error)
+            // console.log("[NotificationOverlay] ERROR connecting signals:", error)
         }
     }
 
     // FIXED: Enhanced notification handling with better error management
     function handleNotificationAdded(id, title, message, level, duration, category, progress, actionText, actionId) {
-        console.log("[NotificationOverlay] *** handleNotificationAdded called ***")
-        console.log("[NotificationOverlay] ID:", id)
+        // console.log("[NotificationOverlay] *** handleNotificationAdded called ***")
+        // console.log("[NotificationOverlay] ID:", id)
         console.log("[NotificationOverlay] Title:", title)
         console.log("[NotificationOverlay] Message:", message)
-        console.log("[NotificationOverlay] Level:", level)
-        console.log("[NotificationOverlay] Duration:", duration)
-        console.log("[NotificationOverlay] Model count before:", notificationModel.count)
+        // console.log("[NotificationOverlay] Level:", level)
+        // console.log("[NotificationOverlay] Duration:", duration)
+        // console.log("[NotificationOverlay] Model count before:", notificationModel.count)
         
         var notification = {
             id: id,
@@ -149,11 +149,11 @@ Item {
     
     // FIXED: Enhanced dismiss handling
     function handleNotificationDismissed(id) {
-        console.log("[NotificationOverlay] Handling dismissal for ID:", id)
+        // console.log("[NotificationOverlay] Handling dismissal for ID:", id)
         for (var i = 0; i < notificationModel.count; i++) {
             var notification = notificationModel.get(i)
             if (notification.id === id) {
-                console.log("[NotificationOverlay] Found notification to dismiss at index:", i)
+                // console.log("[NotificationOverlay] Found notification to dismiss at index:", i)
                 
                 // Cancel auto-dismiss timer if exists
                 if (notification.dismissTimer) {
@@ -164,24 +164,24 @@ Item {
                 return
             }
         }
-        console.log("[NotificationOverlay] Warning: Notification", id, "not found for dismissal")
+        // console.log("[NotificationOverlay] Warning: Notification", id, "not found for dismissal")
     }
     
     function handleNotificationUpdated(id, message, progress) {
-        console.log("[NotificationOverlay] Updating notification:", id, "message:", message, "progress:", progress)
+        // console.log("[NotificationOverlay] Updating notification:", id, "message:", message, "progress:", progress)
         for (var i = 0; i < notificationModel.count; i++) {
             var item = notificationModel.get(i)
             if (item.id === id) {
                 notificationModel.setProperty(i, "message", message)
                 notificationModel.setProperty(i, "progress", progress)
-                console.log("[NotificationOverlay] Updated notification at index:", i)
+                // console.log("[NotificationOverlay] Updated notification at index:", i)
                 break
             }
         }
     }
     
     function handleAllDismissed() {
-        console.log("[NotificationOverlay] Handling dismiss all notifications")
+        // console.log("[NotificationOverlay] Handling dismiss all notifications")
         // Animate all out with stagger
         for (var i = 0; i < notificationModel.count; i++) {
             Qt.callLater(function(index) {
@@ -194,7 +194,7 @@ Item {
     
     // FIXED: Enhanced notification extension handling
     function handleNotificationExtended(id, additionalMs) {
-        console.log("[NotificationOverlay] Extending notification:", id, "by", additionalMs, "ms")
+        // console.log("[NotificationOverlay] Extending notification:", id, "by", additionalMs, "ms")
         for (var i = 0; i < notificationModel.count; i++) {
             var notification = notificationModel.get(i)
             if (notification.id === id) {
@@ -214,7 +214,7 @@ Item {
     function setupAutoDismiss(index, id, duration) {
         if (duration <= 0) return
         
-        console.log("[NotificationOverlay] Setting up auto-dismiss for", id, "in", duration, "ms")
+        // console.log("[NotificationOverlay] Setting up auto-dismiss for", id, "in", duration, "ms")
         
         var timer = Qt.createQmlObject('
             import QtQuick
@@ -249,11 +249,11 @@ Item {
     function animateNotificationIn(index) {
         var item = notificationRepeater.itemAt(index)
         if (!item) {
-            console.log("[NotificationOverlay] Warning: No item found at index", index)
+            // console.log("[NotificationOverlay] Warning: No item found at index", index)
             return
         }
         
-        console.log("[NotificationOverlay] Animating in notification at index:", index)
+        // console.log("[NotificationOverlay] Animating in notification at index:", index)
         
         // Set initial state
         item.opacity = 0
@@ -272,16 +272,16 @@ Item {
     }
     
     function animateNotificationOut(index) {
-        console.log("[NotificationOverlay] Animating out notification at index:", index)
+        // console.log("[NotificationOverlay] Animating out notification at index:", index)
         
         if (index < 0 || index >= notificationModel.count) {
-            console.log("[NotificationOverlay] Invalid index for animation out:", index)
+            // console.log("[NotificationOverlay] Invalid index for animation out:", index)
             return
         }
         
         var item = notificationRepeater.itemAt(index)
         if (!item) {
-            console.log("[NotificationOverlay] No item found, removing directly from model")
+            // console.log("[NotificationOverlay] No item found, removing directly from model")
             notificationModel.remove(index, 1)
             return
         }
@@ -419,7 +419,7 @@ Item {
         }
         
         onFinished: {
-            console.log("[NotificationOverlay] Exit animation finished for index:", targetIndex)
+            // console.log("[NotificationOverlay] Exit animation finished for index:", targetIndex)
             if (targetIndex >= 0 && targetIndex < notificationModel.count) {
                 notificationModel.remove(targetIndex, 1)
             }
@@ -684,7 +684,7 @@ Item {
                             cursorShape: Qt.PointingHandCursor
                             
                             onClicked: {
-                                console.log("[NotificationOverlay] Close button clicked for notification:", model.id)
+                                // console.log("[NotificationOverlay] Close button clicked for notification:", model.id)
                                 
                                 // Cancel any auto-dismiss timer
                                 if (model.dismissTimer) {
@@ -693,10 +693,10 @@ Item {
                                 
                                 // Always allow manual dismissal, regardless of notification type
                                 if (notificationManagerInstance) {
-                                    console.log("[NotificationOverlay] Calling dismissNotification via manager")
+                                    // console.log("[NotificationOverlay] Calling dismissNotification via manager")
                                     notificationManagerInstance.dismissNotification(model.id)
                                 } else {
-                                    console.log("[NotificationOverlay] Fallback to local dismiss")
+                                    // console.log("[NotificationOverlay] Fallback to local dismiss")
                                     handleNotificationDismissed(model.id)
                                 }
                             }
@@ -802,7 +802,7 @@ Item {
             anchors.fill: parent
             onClicked: {
                 // Handle queue expansion or show notification center
-                console.log("[NotificationOverlay] Queue indicator clicked - showing queued notifications")
+                // console.log("[NotificationOverlay] Queue indicator clicked - showing queued notifications")
                 if (notificationManagerInstance) {
                     // Could implement a function to show all queued notifications
                 }
@@ -821,11 +821,11 @@ Item {
     // FIXED: Enhanced notification test functions
     function testNotifications() {
         if (!notificationManagerInstance) {
-            console.log("[NotificationOverlay] Cannot test - no notification manager instance")
+            // console.log("[NotificationOverlay] Cannot test - no notification manager instance")
             return
         }
         
-        console.log("[NotificationOverlay] Starting notification tests...")
+        // console.log("[NotificationOverlay] Starting notification tests...")
         
         // Test consecutive notifications to verify queue works
         notificationManagerInstance.info("Test 1", "First info notification")
@@ -880,7 +880,7 @@ Item {
     function testQueue() {
         if (!notificationManagerInstance) return
         
-        console.log("[NotificationOverlay] Testing queue with rapid notifications...")
+        // console.log("[NotificationOverlay] Testing queue with rapid notifications...")
         for (var i = 1; i <= 10; i++) {
             notificationManagerInstance.info("Queue Test " + i, "Testing notification queue system - item " + i)
         }

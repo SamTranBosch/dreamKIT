@@ -28,6 +28,9 @@ qt_add_executable(dk_ivi
     utils/core/appserializer.cpp
     utils/k3s/manifestbuilder.cpp
     utils/k3s/installer.cpp
+    utils/k3s/jobmanager.cpp
+    utils/monitor/wlanmonitor.cpp
+    utils/monitor/autorestartmanager.cpp
     utils/vapiclient/vapiclient.cpp
     utils/notifications/notificationmanager.cpp
 )

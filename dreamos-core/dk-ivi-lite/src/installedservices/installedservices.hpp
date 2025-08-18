@@ -53,6 +53,7 @@ protected:
     /* specific for VsersAsync, to monitor status of worker node */
     bool wantsNodeMonitor() const override { return true; }
     bool wantsWlanMonitor() const override { return true; }
+    bool wantsAutoRestart() const override { return true; }
 
     void appendItemToQml(const VsersListStruct &it) override
     { emit appendServicesInfoToServicesList(it.name,it.author,it.rating,
