@@ -51,19 +51,17 @@ Async::Job<T>* JobManager::createJobSafely(std::function<T()> task)
     QMutexLocker locker(&m_mutex);
     
     try {
-        // Always create jobs with no parent to avoid cross-thread parenting issues
-        auto* job = new Async::Job<T>(task, nullptr);
+        // Always create jobs in the main thread to avoid parenting issues
+        Async::Job<T>* job = nullptr;
         
-        // If we're in the main thread, we can set this as parent after creation
         if (QThread::currentThread() == m_mainThread) {
-            job->setParent(this);
+            // We're in main thread - create with this as parent
+            job = new Async::Job<T>(task, this);
         } else {
-            // For worker threads, use QMetaObject::invokeMethod to set parent safely
-            QMetaObject::invokeMethod(this, [this, job]() {
-                if (job) { // Check if job still exists
-                    job->setParent(this);
-                }
-            }, Qt::QueuedConnection);
+            // We're in worker thread - create in main thread via invokeMethod
+            QMetaObject::invokeMethod(this, [&]() {
+                job = new Async::Job<T>(task, this);
+            }, Qt::BlockingQueuedConnection);
         }
         
         return job;
@@ -86,11 +84,10 @@ Async::Chain* JobManager::createChainSafely()
     if (QThread::currentThread() == m_mainThread) {
         chain = new Async::Chain(this);
     } else {
-        // Create with no parent first, then set parent in main thread
-        chain = new Async::Chain(nullptr);
-        QMetaObject::invokeMethod(this, [this, chain]() {
-            chain->setParent(this);
-        }, Qt::QueuedConnection);
+        // Create in main thread via invokeMethod
+        QMetaObject::invokeMethod(this, [&]() {
+            chain = new Async::Chain(this);
+        }, Qt::BlockingQueuedConnection);
     }
     
     return chain;
@@ -300,9 +297,9 @@ Async::Job<bool>* JobManager::checkNodeReady(const QString &nodeName, int timeou
             bool ready = result.success && result.output.trimmed() == "0";
             
             qDebug() << "[JobManager] Node" << nodeName << "ready check:"
-                     << "Success:" << result.success 
-                     << "Output:" << result.output.trimmed()
-                     << "Ready:" << ready;
+                     << ". Success:" << result.success 
+                     << ". Output:" << result.output.trimmed()
+                     << ". Ready:" << ready;
             
             return ready;
             
@@ -521,10 +518,10 @@ JobManager::JobResult JobManager::executeCommandsSync(const QStringList &command
                 .arg(exitCode).arg(error.isEmpty() ? "Unknown error" : error);
         }
         
-        qDebug() << "[JobManager] Command result - Success:" << result.success 
-                 << "Exit code:" << exitCode
-                 << "Output:'" << result.output << "'"
-                 << "Error:'" << error << "'";
+        // qDebug() << "[JobManager] Command result - Success:" << result.success 
+        //          << "Exit code:" << exitCode
+        //          << "Output:'" << result.output << "'"
+        //          << "Error:'" << error << "'";
         
     } catch (const std::exception &e) {
         result.success = false;

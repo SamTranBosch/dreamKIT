@@ -135,11 +135,12 @@ ${args}
         stdin: true
         
         volumeMounts:
-        - name: dev
-          mountPath: /dev
+        - name: host-dev
+          mountPath: /host-dev
+          readOnly: true
       
       volumes:
-      - name: dev
+      - name: host-dev
         hostPath: 
           path: /dev
           type: Directory

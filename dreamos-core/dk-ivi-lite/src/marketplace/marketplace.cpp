@@ -277,16 +277,24 @@ void MarketplaceViewModel::confirmInstall()
         return;
     }
     
-    const AppInfo app = m_lastApps[idx];         // copy for threads
+    const AppInfo app = m_lastApps[idx];
     
     m_isInstalling = true;
     emit isInstallingChanged(true);
 
-    if (m_installChain) m_installChain->deleteLater();
-    m_installChain = new Chain(this);
+    // Clean up existing chains
+    if (m_installChain) {
+        m_installChain->deleteLater();
+        m_installChain = nullptr;
+    }
+    if (m_cleanupChain) {
+        m_cleanupChain->deleteLater();
+        m_cleanupChain = nullptr;
+    }
 
-    if (m_cleanupChain) m_cleanupChain->deleteLater();
-    m_cleanupChain = new Chain(this);
+    // Create chains in main thread (this method should be called from main thread)
+    m_installChain = new Async::Chain(this);
+    m_cleanupChain = new Async::Chain(this);
 
     // Reset installation result tracker
     m_lastInstallationSuccess = false;
@@ -299,32 +307,25 @@ void MarketplaceViewModel::confirmInstall()
     });
 
     /* ------------------------------------------------------------------ *
-     *  step-1  : Use JobManager for installation commands via GUI thread *
-     * ------------------------------------------------------------------ */
+    /* step-1  : Use JobManager for installation commands         */
+    /* ----------------------------------------------------------- */
     m_installChain->add([this, app]()->bool {
-        /* 1) build command list --------------------------------------- */
         QStringList cmds;
 
         if (m_lastManifest.isRemoteNode) {
-            cmds << QString("kubectl apply -f %1")
-                        .arg(m_lastManifest.mirrorJobYaml)
-                << QString("kubectl wait --for=condition=complete "
-                            "job/mirror-%1 --timeout=300s")
-                        .arg(app.id);
+            cmds << QString("kubectl apply -f %1").arg(m_lastManifest.mirrorJobYaml)
+                << QString("kubectl wait --for=condition=complete job/mirror-%1 --timeout=300s").arg(app.id);
         }
 
-        cmds << QString("kubectl apply -f %1")
-                    .arg(m_lastManifest.pullJobYaml)
-            << QString("kubectl wait --for=condition=complete "
-                        "job/pull-%1 --timeout=600s")
-                    .arg(app.id);
+        cmds << QString("kubectl apply -f %1").arg(m_lastManifest.pullJobYaml)
+            << QString("kubectl wait --for=condition=complete job/pull-%1 --timeout=600s").arg(app.id);
 
-        /* 2) Execute via JobManager in GUI thread -------------------- */
+        /* Execute via JobManager - create job in main thread */
         bool ok = false;
         QString errorMsg;
         
-        QMetaObject::invokeMethod(qApp, [this, cmds, &ok, &errorMsg]() {
-            // Create job in GUI thread to avoid parenting issues
+        QMetaObject::invokeMethod(this, [this, cmds, &ok, &errorMsg]() {
+            // Create job in main thread
             auto *job = m_jobManager->runInstallationCommands(cmds);
             QEventLoop loop;
             
@@ -335,20 +336,18 @@ void MarketplaceViewModel::confirmInstall()
                 loop.quit();
             });
             
-            // Job will be cleaned up automatically via Qt's parent-child system
             loop.exec();
+            // Job will be cleaned up automatically
         }, Qt::BlockingQueuedConnection);
 
         m_lastInstallationSuccess = ok;
         
         if (!ok) {
-            qWarning() << "[MarketplaceViewModel::confirmInstall] Installation commands failed:" << errorMsg;
+            qWarning() << "[MarketplaceViewModel] Installation commands failed:" << errorMsg;
             NOTIFY_WARNING("Installation", "Failed to execute installation commands: " + errorMsg);
-        } else {
-            qDebug() << "[MarketplaceViewModel::confirmInstall] Installation commands executed successfully.";
         }
         
-        return ok;                                 // false -> abort chain
+        return ok;
     });
 
     /* ----------------------------------------------------------- *

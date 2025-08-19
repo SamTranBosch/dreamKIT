@@ -151,7 +151,7 @@ void InstalledAsyncBase<TI,TD>::initializeMonitoring()
     // 2) WLAN monitoring (if requested)
     if (wantsWlanMonitor()) {
         m_wlanMonitor = new WlanMonitor(this);
-        m_wlanMonitor->setCheckInterval(5000); // 5 seconds
+        m_wlanMonitor->setCheckInterval(30000); // 30 seconds
         connect(m_wlanMonitor, &WlanMonitor::connectionStatusChanged,
                 this, &InstalledAsyncBase::onWlanStatusChanged);
         m_wlanMonitor->startMonitoring();
@@ -205,7 +205,7 @@ void InstalledAsyncBase<TI,TD>::initializeMonitoring()
             });
         });
         
-        nodeTimer->start(15000); // Increased to 15 seconds to reduce load
+        nodeTimer->start(25000); // Increased to 25 seconds to reduce load
         
         qDebug() << "[InstalledAsyncBase] Node monitoring enabled (15s interval, with caching)";
     }
@@ -275,18 +275,20 @@ void InstalledAsyncBase<TI,TD>::updateInstalledList(const QJsonArray &arr)
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::fileChanged(const QString&)
 {
-    // Create job without parent to avoid cross-thread issues
-    auto *job = new Async::Job<QJsonArray>([=]() -> QJsonArray {
-        QThread::msleep(300);
-        DataManager dm; 
-        qDebug() << "[InstalledAsyncBase] fileChanged, reloading from DB: " << dbKey();
-        return dm.load(dbKey());
-    }); // No parent
-    
-    connect(job, &Async::JobBase::finished, this, [this, job](bool) {
-        updateInstalledList(job->result());
-        job->deleteLater();
-    });
+    // Create job in main thread to avoid parenting issues
+    QMetaObject::invokeMethod(this, [this]() {
+        auto *job = new Async::Job<QJsonArray>([=]() -> QJsonArray {
+            QThread::msleep(300);
+            DataManager dm; 
+            qDebug() << "[InstalledAsyncBase] fileChanged, reloading from DB: " << dbKey();
+            return dm.load(dbKey());
+        }, this); // Safe to set parent here since we're in main thread
+        
+        connect(job, &Async::JobBase::finished, this, [this, job](bool) {
+            updateInstalledList(job->result());
+            job->deleteLater();
+        });
+    }, Qt::QueuedConnection);
 }
 
 /* shared editor launcher */
@@ -317,7 +319,7 @@ void InstalledAsyncBase<TI,TD>::executeServices(
     deployInfo.deploymentYaml = deploymentYaml(id);
     deployInfo.subscribe = subscribe;
 
-    // Use job manager for deployment
+    // Create job in main thread
     auto *job = m_jobManager->deployService(deployInfo);
     
     connect(job, &Async::JobBase::finished, this, [this, idx, id, subscribe, job](bool) {
@@ -346,7 +348,7 @@ void InstalledAsyncBase<TI,TD>::removeServices(int idx)
     const QString yaml = deploymentYaml(id);
 
     // Create chain without parent to avoid cross-thread issues
-    auto *chain = new Async::Chain();
+    auto *chain = new Async::Chain(this);
 
     /* shared state between steps  -------------------------------- */
     auto ok      = std::make_shared<bool>(true);
