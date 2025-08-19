@@ -8,19 +8,27 @@
 // ───────────────────────────────────────────────────────────────
 NotificationManager::NotificationManager(QObject *parent) 
     : QObject(parent)
+    , m_maxVisible(5)
+    , m_maxHistory(200)
+    , m_globalMute(false)
+    , m_totalCount(0)
+    , m_unreadCount(0)
+    , m_minIntervalMs(100)  // Reduced from 500ms to 100ms for better responsiveness
+    , m_maxSimilarNotifications(5)  // Increased from 3 to 5
+    , m_enableSmartBatching(true)
 {
-    // Initialize timers
+    // Initialize timers with better intervals
     m_queueTimer = new QTimer(this);
-    m_queueTimer->setSingleShot(false); // Changed to repeating timer
-    m_queueTimer->setInterval(300); // Process queue every 300ms for better UX
+    m_queueTimer->setSingleShot(false);
+    m_queueTimer->setInterval(50); // FIXED: Reduced from 300ms to 50ms for faster processing
     connect(m_queueTimer, &QTimer::timeout, this, &NotificationManager::processQueue);
 
     m_cleanupTimer = new QTimer(this);
-    m_cleanupTimer->setInterval(30000); // Cleanup every 30 seconds
+    m_cleanupTimer->setInterval(30000);
     connect(m_cleanupTimer, &QTimer::timeout, this, &NotificationManager::cleanupOldNotifications);
     m_cleanupTimer->start();
 
-    // qDebug() << "[NotificationManager] Initialized with max visible:" << m_maxVisible;
+    qDebug() << "[NotificationManager] Initialized with max visible:" << m_maxVisible;
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -45,29 +53,46 @@ QString NotificationManager::showNotification(const QString &title,
     data.category = category;
     data.timestamp = QDateTime::currentDateTime();
 
-    // qDebug() << "[NotificationManager] Creating notification:" << data.id << "Title:" << title << "Level:" << level;
+    qDebug() << "[NotificationManager] Creating notification:" << data.id 
+             << "Title:" << title << "Level:" << level 
+             << "Active count:" << m_activeNotifications.size()
+             << "Queue size:" << m_queue.size();
 
-    // Check if we should queue this notification
+    // FIXED: Always add to history first, regardless of queue status
+    addToHistory(data);
+
+    // FIXED: Better queue logic - check if we should queue this notification
     if (shouldQueue()) {
-        // qDebug() << "[NotificationManager] Queueing notification" << data.id << "- active count:" << m_activeNotifications.size();
+        qDebug() << "[NotificationManager] Queueing notification" << data.id 
+                 << "- active count:" << m_activeNotifications.size();
         m_queue.enqueue(data);
-        startQueueProcessing();
+        
+        // FIXED: Start queue processing immediately if not already running
+        if (!m_queueTimer->isActive()) {
+            startQueueProcessing();
+        }
         emit queueCountChanged();
-        addToHistory(data); // Add to history even when queued
+        
+        // Update counters
+        m_totalCount++;
+        m_unreadCount++;
+        emit totalNotificationsChanged();
+        emit unreadCountChanged();
+        
         return data.id;
     }
 
     // Add directly to active notifications
     m_activeNotifications.append(data);
-    addToHistory(data);
     
-    // qDebug() << "[NotificationManager] Showing notification immediately:" << data.id << "Active count:" << m_activeNotifications.size();
+    qDebug() << "[NotificationManager] Showing notification immediately:" << data.id 
+             << "Active count:" << m_activeNotifications.size();
     
     emit notificationAdded(data.id, data.title, data.message, 
                           static_cast<int>(data.level), data.duration, 
                           data.category, data.progress, data.actionText, data.actionId);
     
-    // Auto-dismiss timer (only for non-error notifications or those with explicit duration)
+    // FIXED: Auto-dismiss timer setup with better error handling
     if (data.duration > 0) {
         QTimer::singleShot(data.duration, this, [this, id = data.id](){
             qDebug() << "[NotificationManager] Auto-dismissing notification:" << id;
@@ -160,37 +185,60 @@ QString NotificationManager::smartNotify(const QString &title,
                                         const QString &category,
                                         const QString &groupId)
 {
-    // Check if we should update existing instead of creating new
+    // FIXED: Less aggressive deduplication for frequent notifications
     if (!groupId.isEmpty() && m_groupToNotificationMap.contains(groupId)) {
         QString existingId = m_groupToNotificationMap[groupId];
-        QString updatedId = updateExisting(existingId, message, level);
-        if (!updatedId.isEmpty()) {
-            extendDuration(updatedId, 3000);
-            return updatedId;
+        // Check if the existing notification is still active
+        bool foundActive = false;
+        for (const auto &notification : m_activeNotifications) {
+            if (notification.id == existingId) {
+                foundActive = true;
+                break;
+            }
+        }
+        
+        if (foundActive) {
+            QString updatedId = updateExisting(existingId, message, level);
+            if (!updatedId.isEmpty()) {
+                extendDuration(updatedId, 3000);
+                return updatedId;
+            }
+        } else {
+            // Clean up stale mapping
+            m_groupToNotificationMap.remove(groupId);
         }
     }
     
-    // Check if it's too soon for this category
-    if (isTooSoon(category)) {
-        // Try to find similar notification to update
-        QString similarId = findSimilarNotification(title, category);
-        if (!similarId.isEmpty()) {
-            return updateExisting(similarId, message, level);
+    // FIXED: More lenient timing check for frequent notifications
+    QDateTime currentTime = QDateTime::currentDateTime();
+    if (m_lastNotificationTime.contains(category)) {
+        qint64 timeSinceLastMs = m_lastNotificationTime[category].msecsTo(currentTime);
+        if (timeSinceLastMs < m_minIntervalMs) {
+            // Try to find similar notification to update instead of blocking
+            QString similarId = findSimilarNotification(title, category);
+            if (!similarId.isEmpty()) {
+                return updateExisting(similarId, message, level);
+            }
+            // If no similar notification found, still allow the new one but with reduced priority
         }
     }
     
-    // Check if we should batch notifications
+    // FIXED: Less aggressive batching
     if (shouldBatch(category)) {
-        QString batchId = category + "_batch_" + QString::number(QDateTime::currentMSecsSinceEpoch());
-        startBatch(batchId);
-        addToBatch(batchId, title, message, level);
-        
-        // Auto-commit batch after short delay
-        QTimer::singleShot(1000, this, [this, batchId]() {
-            commitBatch(batchId);
-        });
-        
-        return batchId;
+        // Only batch if there are many rapid notifications
+        int recentCount = countRecentNotifications(category, 2000); // Last 2 seconds
+        if (recentCount >= 8) { // Increased threshold from 3 to 8
+            QString batchId = category + "_batch_" + QString::number(QDateTime::currentMSecsSinceEpoch());
+            startBatch(batchId);
+            addToBatch(batchId, title, message, level);
+            
+            // Auto-commit batch after delay
+            QTimer::singleShot(1500, this, [this, batchId]() {
+                commitBatch(batchId);
+            });
+            
+            return batchId;
+        }
     }
     
     // Create new notification
@@ -200,7 +248,7 @@ QString NotificationManager::smartNotify(const QString &title,
     if (!groupId.isEmpty()) {
         m_groupToNotificationMap[groupId] = notificationId;
     }
-    m_lastNotificationTime[category] = QDateTime::currentDateTime();
+    m_lastNotificationTime[category] = currentTime;
     m_categoryToNotificationMap[category] = notificationId;
     
     return notificationId;
@@ -372,22 +420,48 @@ void NotificationManager::commitBatch(const QString &batchId, int maxNotificatio
     emit unreadCountChanged();
 }
 
-// Helper methods
+// ───────────────────────────────────────────────────────────────
+// FIXED: Enhanced helper methods
+// ───────────────────────────────────────────────────────────────
 bool NotificationManager::shouldBatch(const QString &category) const
 {
     if (!m_enableSmartBatching) return false;
     
     // Count recent notifications in this category
-    int recentCount = 0;
-    QDateTime cutoff = QDateTime::currentDateTime().addSecs(-10); // Last 10 seconds
+    int recentCount = countRecentNotifications(category, 3000); // Last 3 seconds
     
-    for (const auto &data : m_history) {
+    return recentCount >= m_maxSimilarNotifications;
+}
+
+int NotificationManager::countRecentNotifications(const QString &category, int timeWindowMs) const
+{
+    int count = 0;
+    QDateTime cutoff = QDateTime::currentDateTime().addMSecs(-timeWindowMs);
+    
+    // Count in active notifications
+    for (const auto &data : m_activeNotifications) {
         if (data.category == category && data.timestamp > cutoff) {
-            recentCount++;
+            count++;
         }
     }
     
-    return recentCount >= m_maxSimilarNotifications;
+    // Count in queue
+    QQueue<NotificationData> tempQueue = m_queue;
+    while (!tempQueue.isEmpty()) {
+        NotificationData data = tempQueue.dequeue();
+        if (data.category == category && data.timestamp > cutoff) {
+            count++;
+        }
+    }
+    
+    // Count in recent history
+    for (const auto &data : m_history) {
+        if (data.category == category && data.timestamp > cutoff) {
+            count++;
+        }
+    }
+    
+    return count;
 }
 
 bool NotificationManager::isTooSoon(const QString &category) const
@@ -397,16 +471,30 @@ bool NotificationManager::isTooSoon(const QString &category) const
     }
     
     QDateTime lastTime = m_lastNotificationTime[category];
-    return lastTime.msecsTo(QDateTime::currentDateTime()) < m_minIntervalMs;
+    qint64 timeSinceLastMs = lastTime.msecsTo(QDateTime::currentDateTime());
+    
+    // FIXED: More lenient timing - only block if very frequent (< 50ms)
+    return timeSinceLastMs < 50; // Reduced from m_minIntervalMs
 }
 
 QString NotificationManager::findSimilarNotification(const QString &title, const QString &category) const
 {
+    // Look in active notifications first
     for (const auto &notification : m_activeNotifications) {
         if (notification.category == category && notification.title == title) {
             return notification.id;
         }
     }
+    
+    // FIXED: Also check recent notifications in queue
+    QQueue<NotificationData> tempQueue = m_queue;
+    while (!tempQueue.isEmpty()) {
+        NotificationData data = tempQueue.dequeue();
+        if (data.category == category && data.title == title) {
+            return data.id;
+        }
+    }
+    
     return QString();
 }
 
@@ -415,7 +503,9 @@ QString NotificationManager::findSimilarNotification(const QString &title, const
 // ───────────────────────────────────────────────────────────────
 void NotificationManager::dismissNotification(const QString &id)
 {
-    // qDebug() << "[NotificationManager] Dismissing notification:" << id;
+    qDebug() << "[NotificationManager] Dismissing notification:" << id 
+             << "Active count:" << m_activeNotifications.size()
+             << "Queue size:" << m_queue.size();
     
     // Clean up group mappings
     for (auto it = m_groupToNotificationMap.begin(); it != m_groupToNotificationMap.end();) {
@@ -441,7 +531,8 @@ void NotificationManager::dismissNotification(const QString &id)
         if (m_activeNotifications[i].id == id) {
             m_activeNotifications.removeAt(i);
             found = true;
-            // qDebug() << "[NotificationManager] Removed notification from active list. Remaining count:" << m_activeNotifications.size();
+            qDebug() << "[NotificationManager] Removed notification from active list. Remaining count:" 
+                     << m_activeNotifications.size();
             break;
         }
     }
@@ -450,25 +541,17 @@ void NotificationManager::dismissNotification(const QString &id)
     if (m_activeTasks.contains(id)) {
         m_activeTasks.remove(id);
         found = true;
-        // qDebug() << "[NotificationManager] Removed notification from active tasks";
+        qDebug() << "[NotificationManager] Removed notification from active tasks";
     }
     
     if (found) {
         emit notificationDismissed(id);
         
-        // Process next in queue if available
-        if (!m_queue.isEmpty() && m_activeNotifications.size() < m_maxVisible) {
-            // qDebug() << "[NotificationManager] Processing next queued notification";
-            processNextInQueue();
-        }
+        // FIXED: Immediately process next queued notifications
+        processQueueImmediate();
         
-        // Stop queue processing if queue is empty
-        if (m_queue.isEmpty() && m_queueTimer->isActive()) {
-            m_queueTimer->stop();
-            emit queueCountChanged();
-        }
     } else {
-        // qDebug() << "[NotificationManager] Warning: Notification" << id << "not found for dismissal";
+        qDebug() << "[NotificationManager] Warning: Notification" << id << "not found for dismissal";
     }
 }
 
@@ -531,22 +614,24 @@ void NotificationManager::dismissCategory(const QString &category)
 // ───────────────────────────────────────────────────────────────
 QString NotificationManager::info(const QString &title, const QString &message, const QString &category)
 {
-    return showNotification(title, message, 0, 5000, category);
+    // Use smartNotify instead of direct showNotification for better handling
+    return smartNotify(title, message, 0, category.isEmpty() ? "info" : category);
 }
 
 QString NotificationManager::success(const QString &title, const QString &message, const QString &category)
 {
-    return showNotification(title, message, 1, 4000, category);
+    return smartNotify(title, message, 1, category.isEmpty() ? "success" : category);
 }
 
 QString NotificationManager::warning(const QString &title, const QString &message, const QString &category)
 {
-    return showNotification(title, message, 2, 6000, category);
+    return smartNotify(title, message, 2, category.isEmpty() ? "warning" : category);
 }
 
 QString NotificationManager::error(const QString &title, const QString &message, const QString &category)
 {
-    return showNotification(title, message, 3, 0, category); // Errors don't auto-dismiss but CAN be manually dismissed
+    // Errors should always be shown immediately, bypass smart logic
+    return showNotification(title, message, 3, 0, category.isEmpty() ? "error" : category);
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -771,9 +856,16 @@ void NotificationManager::processQueue()
         return;
     }
     
-    // Process notifications from queue while we have space
-    while (!m_queue.isEmpty() && m_activeNotifications.size() < m_maxVisible) {
+    int processedCount = 0;
+    const int maxProcessPerCycle = 3; // Process up to 3 notifications per cycle
+    
+    // FIXED: Process multiple notifications from queue while we have space
+    while (!m_queue.isEmpty() && 
+           m_activeNotifications.size() < m_maxVisible && 
+           processedCount < maxProcessPerCycle) {
+        
         processNextInQueue();
+        processedCount++;
     }
     
     // Update queue count
@@ -782,7 +874,30 @@ void NotificationManager::processQueue()
     // Stop timer if queue is empty
     if (m_queue.isEmpty()) {
         m_queueTimer->stop();
-        // qDebug() << "[NotificationManager] Queue processing completed - all notifications shown";
+        qDebug() << "[NotificationManager] Queue processing completed - all notifications shown";
+    } else {
+        qDebug() << "[NotificationManager] Processed" << processedCount 
+                 << "notifications, remaining in queue:" << m_queue.size();
+    }
+}
+
+// ───────────────────────────────────────────────────────────────
+// FIXED: New method for immediate queue processing
+// ───────────────────────────────────────────────────────────────
+void NotificationManager::processQueueImmediate()
+{
+    // Process queue immediately when space becomes available
+    while (!m_queue.isEmpty() && m_activeNotifications.size() < m_maxVisible) {
+        processNextInQueue();
+    }
+    
+    emit queueCountChanged();
+    
+    // Continue normal queue processing if there are still items
+    if (!m_queue.isEmpty() && !m_queueTimer->isActive()) {
+        startQueueProcessing();
+    } else if (m_queue.isEmpty() && m_queueTimer->isActive()) {
+        m_queueTimer->stop();
     }
 }
 
@@ -829,9 +944,6 @@ void NotificationManager::addToHistory(const NotificationData &data)
 bool NotificationManager::shouldQueue() const
 {
     bool shouldQueue = m_activeNotifications.size() >= m_maxVisible;
-    if (shouldQueue) {
-        // qDebug() << "[NotificationManager] Should queue: active=" << m_activeNotifications.size() << "max=" << m_maxVisible;
-    }
     return shouldQueue;
 }
 
@@ -844,9 +956,10 @@ void NotificationManager::processNextInQueue()
     NotificationData data = m_queue.dequeue();
     m_activeNotifications.append(data);
     
-    // qDebug() << "[NotificationManager] Processing queued notification:" << data.id 
-            //  << "Active count:" << m_activeNotifications.size() 
-            //  << "Queue remaining:" << m_queue.size();
+    qDebug() << "[NotificationManager] Processing queued notification:" << data.id 
+             << "Title:" << data.title
+             << "Active count:" << m_activeNotifications.size() 
+             << "Queue remaining:" << m_queue.size();
     
     emit notificationAdded(data.id, data.title, data.message, 
                           static_cast<int>(data.level), data.duration, 
@@ -863,7 +976,10 @@ void NotificationManager::processNextInQueue()
 void NotificationManager::startQueueProcessing()
 {
     if (!m_queueTimer->isActive() && !m_queue.isEmpty()) {
-        // qDebug() << "[NotificationManager] Starting queue processing - queue size:" << m_queue.size();
+        qDebug() << "[NotificationManager] Starting queue processing - queue size:" << m_queue.size();
         m_queueTimer->start();
+        
+        // FIXED: Process first batch immediately
+        QTimer::singleShot(0, this, &NotificationManager::processQueue);
     }
 }

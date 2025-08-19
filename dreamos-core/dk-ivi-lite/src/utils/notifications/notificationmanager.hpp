@@ -216,10 +216,17 @@ private:
     QHash<QString, QString> m_categoryToNotificationMap;  // category -> latest notificationId
     
     // Smart notification settings
-    int m_minIntervalMs = 500;  // Minimum interval between same-category notifications
-    int m_maxSimilarNotifications = 3;  // Max similar notifications before batching
+    int m_minIntervalMs = 100;  // Minimum interval between same-category notifications
+    int m_maxSimilarNotifications = 5;  // Max similar notifications before batching
     bool m_enableSmartBatching = true;
+    // Queue processing settings
+    static constexpr int QUEUE_PROCESS_INTERVAL = 50;  // 50ms instead of 300ms
+    static constexpr int MAX_PROCESS_PER_CYCLE = 3;    // Process up to 3 at once
     
+    // FIXED: Enhanced helper methods for better notification handling
+    void processQueueImmediate();
+    int countRecentNotifications(const QString &category, int timeWindowMs) const;
+
     // Add these new helper methods to your existing private methods:
     bool shouldBatch(const QString &category) const;
     bool isTooSoon(const QString &category) const;

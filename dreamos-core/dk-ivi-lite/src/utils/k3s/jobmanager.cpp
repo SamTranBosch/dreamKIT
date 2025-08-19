@@ -113,7 +113,6 @@ Async::Job<JobManager::JobResult>* JobManager::deployService(const DeploymentInf
                 
                 if (!nodeReady) {
                     result.errorMessage = "Worker node not ready. Deployment may fail.";
-                    // Don't fail completely, just warn
                     NOTIFY_WARNING("Deployment", result.errorMessage);
                 }
             }

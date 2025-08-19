@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: device-test
+spec:
+  containers:
+  - name: device-test
+    image: python:3.9
+    command: ["/bin/bash"]
+    args: ["-c", "pip install opencv-python pyserial && python -c 'import cv2, serial, os; print(\"Devices:\", [d for d in os.listdir(\"/dev/\") if \"video\" in d or \"ttyACM\" in d]); cap=cv2.VideoCapture(0); print(\"Camera:\", cap.isOpened()); cap.release()' && sleep 3600"]
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - name: dev-video
+      mountPath: /dev/video0
+    - name: dev-ttyacm
+      mountPath: /dev/ttyACM0
+  volumes:
+  - name: dev-video
+    hostPath:
+      path: /dev/video0
+      type: CharDevice
+  - name: dev-ttyacm
+    hostPath:
+      path: /dev/ttyACM0
+      type: CharDevice
+  restartPolicy: Never
