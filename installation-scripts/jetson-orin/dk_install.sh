@@ -493,7 +493,7 @@ main() {
     # Step 10   SDV Runtime
     ###############################################################################
     show_step 10 "SDV Runtime" "Setting up Software Defined Vehicle runtime environment"
-
+    
     # Export variables for sub-scripts
     export HOME_DIR
     export DK_USER
@@ -546,36 +546,62 @@ main() {
             dk_ivi_value="${arg#*=}"
         fi
     done
-    
+
     DOCKER_HUB_NAMESPACE="ghcr.io/samtranbosch"
-    
+
     if [[ "$dk_ivi_value" == "true" ]]; then
-    show_info "Installing IVI interface …"
+        show_info "Installing IVI interface …"
 
-    run_with_feedback "sudo $CURRENT_DIR/scripts/dk_enable_xhost.sh" \
-                        "X11 forwarding enabled" "X11 setup failed"
-    run_with_feedback "xhost +local:docker" "Docker X11 access granted" "X11 access failed"
+        run_with_feedback "sudo $CURRENT_DIR/scripts/dk_enable_xhost.sh" \
+                            "X11 forwarding enabled" "X11 setup failed"
+        run_with_feedback "xhost +local:docker" "Docker X11 access granted" "X11 access failed"
 
-    apply_manifest dk-ivi-pull.yaml
-    run_with_feedback \
-        "sudo kubectl delete job dk-ivi-pull --ignore-not-found" \
-        "Pull latest IVI image" "Cleanup warning"
+        # Step 1: Clean up existing deployment first
+        show_info "Cleaning up existing IVI deployment..."
+        run_with_feedback \
+            "sudo kubectl delete deployment dk-ivi --ignore-not-found --wait=true" \
+            "Removed existing IVI deployment" "Cleanup warning"
 
-    run_with_feedback \
-        "sudo kubectl delete deployment dk-ivi --ignore-not-found" \
-        "Removed existing IVI (if any)" "Cleanup warning"
+        # Step 2: Pull fresh image
+        show_info "Pulling latest IVI image..."
+        apply_manifest dk-ivi-pull.yaml
+        run_with_feedback \
+            "sudo kubectl wait --for=condition=complete job/dk-ivi-pull" \
+            "Latest IVI image pulled successfully" "Image pull failed"
+        
+        # Step 3: Clean up the pull job
+        run_with_feedback \
+            "sudo kubectl delete job dk-ivi-pull --ignore-not-found" \
+            "Pull job cleaned up" "Cleanup warning"
 
-    # Decide which manifest to apply
-    if [ -f "/etc/nv_tegra_release" ]; then
-        apply_manifest dk-ivi-jetson.yaml
-    else
-        apply_manifest dk-ivi.yaml
-    fi
+        # Step 4: Get the image digest to force update (optional but recommended)
+        show_info "Getting image information..."
+        IVI_IMAGE_ID=$(docker images --format "table {{.Repository}}:{{.Tag}}\t{{.ID}}" | grep "${DOCKER_HUB_NAMESPACE}/dk_ivi:latest" | awk '{print $2}' | head -1)
+        if [ -n "$IVI_IMAGE_ID" ]; then
+            show_success "Image ID: $IVI_IMAGE_ID"
+        fi
 
-    run_with_feedback \
-        "sudo kubectl rollout status deployment/dk-ivi" \
-        "IVI interface is READY" \
-        "IVI failed to start"
+        # Step 5: Deploy with fresh image
+        show_info "Deploying IVI interface..."
+        # Decide which manifest to apply
+        if [ -f "/etc/nv_tegra_release" ]; then
+            apply_manifest dk-ivi-jetson.yaml
+        else
+            apply_manifest dk-ivi.yaml
+        fi
+
+        # Step 6: Wait for deployment with timeout
+        show_info "Waiting for IVI to be ready..."
+        run_with_feedback \
+            "sudo kubectl rollout status deployment/dk-ivi" \
+            "IVI interface is READY" \
+            "IVI failed to start"
+        
+        # Step 7: Verify the deployment is using the latest image
+        show_info "Verifying deployment..."
+        RUNNING_IMAGE=$(kubectl get deployment dk-ivi -o jsonpath='{.spec.template.spec.containers[0].image}')
+        show_info "Deployed image: $RUNNING_IMAGE"
+
     else
         show_info "IVI installation skipped (you can install later with './dk_install dk_ivi=true')"
     fi
