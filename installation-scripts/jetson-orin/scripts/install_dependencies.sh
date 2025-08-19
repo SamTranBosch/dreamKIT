@@ -1,25 +1,115 @@
 #!/bin/bash
 
-# Import colors and utilities from parent script
-# This script should be called from dk_install.sh with proper environment
+# Updated install_dependencies.sh - Standalone execution with parent script compatibility
+# Can be called both from dk_install.sh and as standalone sudo script
+
+# Check if we're being called from dk_install.sh or standalone
+if [[ -n "$CURRENT_DIR" && -n "$DK_USER" ]]; then
+    # Called from dk_install.sh - functions and variables are available
+    SCRIPT_MODE="integrated"
+else
+    # Called standalone - need to set up environment
+    SCRIPT_MODE="standalone"
+    
+    # Detect user (handle sudo execution)
+    if [ -n "$SUDO_USER" ]; then
+        DK_USER=$SUDO_USER
+    else
+        DK_USER=$USER
+    fi
+    
+    # Get script directory
+    CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    
+    # Colors and formatting for standalone mode
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    BLUE='\033[0;34m'
+    PURPLE='\033[0;35m'
+    CYAN='\033[0;36m'
+    WHITE='\033[1;37m'
+    BOLD='\033[1m'
+    DIM='\033[2m'
+    NC='\033[0m' # No Color
+
+    # Unicode symbols
+    CHECKMARK="✓"
+    CROSS="✗"
+    ARROW="→"
+    
+    # Utility functions for standalone mode
+    show_info() {
+        local message=$1
+        echo -e "${BLUE} ${ARROW} ${message}${NC}"
+    }
+    
+    show_success() {
+        local message=$1
+        echo -e "${GREEN}${BOLD} ${CHECKMARK} ${message}${NC}"
+    }
+    
+    show_error() {
+        local message=$1
+        echo -e "${RED}${BOLD} ${CROSS} ${message}${NC}"
+    }
+    
+    show_warning() {
+        local message=$1
+        echo -e "${YELLOW}${BOLD} ⚠ ${message}${NC}"
+    }
+    
+    run_with_feedback() {
+        local command=$1
+        local success_msg=$2
+        local error_msg=$3
+        local show_output=${4:-false}
+        
+        if [ "$show_output" = "true" ]; then
+            echo -e "${DIM}${CYAN}Running: $command${NC}"
+            if eval "$command"; then
+                show_success "$success_msg"
+                return 0
+            else
+                show_error "$error_msg"
+                return 1
+            fi
+        else
+            eval "$command" >/dev/null 2>&1
+            local exit_code=$?
+            
+            if [ $exit_code -eq 0 ]; then
+                show_success "$success_msg"
+                return 0
+            else
+                show_error "$error_msg"
+                return 1
+            fi
+        fi
+    }
+    
+    echo -e "${BLUE}${BOLD}dreamOS Dependencies Installation${NC}"
+    echo -e "${DIM}Installing system dependencies and k3s offline tools...${NC}"
+    echo
+fi
 
 # Dependencies installation script
 # This handles all system dependencies for dreamOS
 
 # ---------------------------------------------------------------------------
-# Helper   update package index
+# Helper: update package index
 # ---------------------------------------------------------------------------
 update_package_index() {
-    show_info "Updating package index …"
+    show_info "Updating package index..."
     run_with_feedback \
-        "sudo apt-get update -y" \
+        "apt-get update -y" \
         "Package index updated" \
         "Failed to update package index" \
-        true true
+        $([[ "$SCRIPT_MODE" == "standalone" ]] && echo "true" || echo "false")
 }
 
 # ---------------------------------------------------------------------------
-# Helper   install a single deb package if the related command is absent
+# Helper: install a single deb package if the related command is absent
 #   $1   binary/command to look for
 #   $2   deb package to install (defaults to same as $1)
 # ---------------------------------------------------------------------------
@@ -30,17 +120,17 @@ install_if_missing() {
     if command -v "$cmd_name" >/dev/null 2>&1; then
         show_info "$cmd_name is already installed"
     else
-        show_info "Installing $deb_name …"
+        show_info "Installing $deb_name..."
         run_with_feedback \
-            "sudo apt-get install -y $deb_name" \
+            "apt-get install -y $deb_name" \
             "$deb_name installed successfully" \
             "Failed to install $deb_name" \
-            true true
+            $([[ "$SCRIPT_MODE" == "standalone" ]] && echo "true" || echo "false")
     fi
 }
 
 # ---------------------------------------------------------------------------
-# Helper   prepare host for offline k3s operation
+# Helper: prepare host for offline k3s operation
 # ---------------------------------------------------------------------------
 prepare_offline_k3s_tools() {
     show_info "Preparing host for offline k3s operation..."
@@ -64,10 +154,9 @@ prepare_offline_k3s_tools() {
     show_info "Creating k3s tools directory: $tools_dir"
     
     run_with_feedback \
-        "sudo mkdir -p $tools_dir" \
+        "mkdir -p $tools_dir" \
         "k3s tools directory created" \
-        "Failed to create k3s tools directory" \
-        true true
+        "Failed to create k3s tools directory"
     
     # Copy essential binaries to tools directory
     show_info "Copying essential binaries for k3s offline operation..."
@@ -96,7 +185,7 @@ prepare_offline_k3s_tools() {
         local binary_name=$(basename "$binary")
         
         if [ -f "$binary" ]; then
-            if sudo cp "$binary" "$tools_dir/" 2>/dev/null; then
+            if cp "$binary" "$tools_dir/" 2>/dev/null; then
                 copied_tools+=("$binary_name")
             else
                 failed_tools+=("$binary_name")
@@ -118,7 +207,7 @@ prepare_offline_k3s_tools() {
             esac
             
             if [ -n "$alt_binary" ] && [ -f "$alt_binary" ]; then
-                if sudo cp "$alt_binary" "$tools_dir/$binary_name" 2>/dev/null; then
+                if cp "$alt_binary" "$tools_dir/$binary_name" 2>/dev/null; then
                     copied_tools+=("$binary_name")
                 else
                     failed_tools+=("$binary_name")
@@ -131,10 +220,9 @@ prepare_offline_k3s_tools() {
     
     # Set proper permissions
     run_with_feedback \
-        "sudo chmod +x $tools_dir/*" \
+        "chmod +x $tools_dir/*" \
         "Set executable permissions for k3s tools" \
-        "Failed to set permissions for k3s tools" \
-        true true
+        "Failed to set permissions for k3s tools"
     
     # Report results
     if [ ${#copied_tools[@]} -gt 0 ]; then
@@ -149,14 +237,16 @@ prepare_offline_k3s_tools() {
     # Verify the setup
     show_info "Verifying k3s tools setup..."
     if [ -d "$tools_dir" ]; then
-        local tool_count=$(sudo find "$tools_dir" -type f -executable | wc -l)
+        local tool_count=$(find "$tools_dir" -type f -executable 2>/dev/null | wc -l)
         show_success "k3s tools directory prepared with $tool_count executable tools"
         
-        # List available tools for debugging
-        show_info "Tools available in $tools_dir:"
-        sudo ls -la "$tools_dir/" | while IFS= read -r line; do
-            echo -e "${DIM}  $line${NC}"
-        done
+        # List available tools for debugging (only in standalone mode)
+        if [[ "$SCRIPT_MODE" == "standalone" ]]; then
+            show_info "Tools available in $tools_dir:"
+            ls -la "$tools_dir/" | while IFS= read -r line; do
+                echo -e "${DIM}  $line${NC}"
+            done
+        fi
     else
         show_error "k3s tools directory setup failed"
         return 1
@@ -164,28 +254,12 @@ prepare_offline_k3s_tools() {
 }
 
 # ---------------------------------------------------------------------------
-# Helper   install additional system tools for k3s
+# Helper: install additional system tools for k3s
 # ---------------------------------------------------------------------------
 install_k3s_system_dependencies() {
     show_info "Installing additional system dependencies for k3s..."
     
-    local k3s_deps=(
-        "systemd"
-        "systemctl"
-        "mount"
-        "umount"
-        "findmnt"
-        "lsblk"
-        "blkid"
-        "iptables"
-        "ip"
-        "ss"
-        "nsenter"
-        "unshare"
-        "cgroupfs-mount"
-    )
-    
-    # Install packages that provide these tools
+    # Install packages that provide required tools
     local packages=(
         "systemd"
         "util-linux"
@@ -204,23 +278,22 @@ install_k3s_system_dependencies() {
     if ! mount | grep -q cgroup; then
         show_info "Mounting cgroups..."
         run_with_feedback \
-            "sudo mount -t cgroup -o all cgroup /sys/fs/cgroup || true" \
+            "mount -t cgroup -o all cgroup /sys/fs/cgroup || true" \
             "cgroups mounted successfully" \
-            "cgroups mount failed (may be normal)" \
-            false false
+            "cgroups mount failed (may be normal)"
     else
         show_info "cgroups already mounted"
     fi
 }
 
 # ---------------------------------------------------------------------------
-# Helper   install k9s when missing
+# Helper: install k9s when missing
 # ---------------------------------------------------------------------------
 install_k9s() {
-    # ---- Version to pull (override via env K9S_VERSION) --------------------
+    # Version to pull (override via env K9S_VERSION)
     local VERSION="${K9S_VERSION:-0.50.9}"
 
-    # ---- Detect architecture ----------------------------------------------
+    # Detect architecture
     local ARCH
     local UNAME_ARCH="$(uname -m)"
     
@@ -242,12 +315,12 @@ install_k9s() {
             ;;
     esac
 
-    # ---- Compose download URL ---------------------------------------------
+    # Compose download URL
     local OS="linux"
     local TARBALL="k9s_${OS}_${ARCH}.tar.gz"
     local URL="https://github.com/derailed/k9s/releases/download/v${VERSION}/${TARBALL}"
 
-    # ---- Verify URL exists before downloading -----------------------------
+    # Verify URL exists before downloading
     show_info "Verifying k9s release availability for ${ARCH}..."
     if ! curl -fsSL --head "$URL" >/dev/null 2>&1; then
         show_error "k9s v${VERSION} not available for ${ARCH} architecture"
@@ -255,220 +328,46 @@ install_k9s() {
         return 1
     fi
 
-    # ---- Download & install ------------------------------------------------
-    show_info "Downloading k9s v${VERSION} for ${ARCH} (Jetson Orin)"
+    # Download & install
+    show_info "Downloading k9s v${VERSION} for ${ARCH}..."
     run_with_feedback \
         "tmp_dir=\$(mktemp -d) && \
-         echo \"Downloading from: ${URL}\" && \
          curl -fsSL \"${URL}\" -o \"\$tmp_dir/${TARBALL}\" && \
-         echo \"Extracting k9s binary...\" && \
-         sudo tar -C /usr/local/bin -xzf \"\$tmp_dir/${TARBALL}\" k9s && \
-         sudo chmod +x /usr/local/bin/k9s && \
-         echo \"Cleaning up temporary files...\" && \
-         rm -rf \"\$tmp_dir\" && \
-         echo \"Verifying installation...\" && \
-         k9s version --short" \
+         tar -C /usr/local/bin -xzf \"\$tmp_dir/${TARBALL}\" k9s && \
+         chmod +x /usr/local/bin/k9s && \
+         rm -rf \"\$tmp_dir\"" \
         "k9s v${VERSION} installed successfully for ${ARCH}" \
         "Failed to install k9s v${VERSION} for ${ARCH}" \
-        true true
+        $([[ "$SCRIPT_MODE" == "standalone" ]] && echo "true" || echo "false")
 }
 
 # ---------------------------------------------------------------------------
-# Helper   check Node.js version and compare with minimum required
-# ---------------------------------------------------------------------------
-check_node_version() {
-    local min_version="$1"
-    local current_version="$2"
-    
-    # Convert versions to comparable format (remove 'v' prefix and compare)
-    local min_ver_clean="${min_version#v}"
-    local current_ver_clean="${current_version#v}"
-    
-    # Use sort -V for version comparison
-    if printf '%s\n%s\n' "$min_ver_clean" "$current_ver_clean" | sort -V -C; then
-        return 0  # current >= minimum
-    else
-        return 1  # current < minimum
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# Helper   install Node.js via NodeSource repository for latest versions
+# Helper: install Node.js via NodeSource repository
 # ---------------------------------------------------------------------------
 install_nodejs_nodesource() {
-    local target_version="${NODE_VERSION:-20}"  # Default to Node.js 20 LTS
+    local target_version="${NODE_VERSION:-20}"
     
     show_info "Installing Node.js v${target_version} via NodeSource repository..."
     
     # Remove any existing Node.js installations from apt
     run_with_feedback \
-        "sudo apt-get remove -y nodejs npm" \
+        "apt-get remove -y nodejs npm" \
         "Removed existing Node.js packages" \
-        "Failed to remove existing Node.js (continuing anyway)" \
-        false false
+        "No existing Node.js packages to remove"
     
     # Install NodeSource repository
     run_with_feedback \
-        "curl -fsSL https://deb.nodesource.com/setup_${target_version}.x | sudo -E bash -" \
+        "curl -fsSL https://deb.nodesource.com/setup_${target_version}.x | bash -" \
         "NodeSource repository added successfully" \
         "Failed to add NodeSource repository" \
-        true true
+        $([[ "$SCRIPT_MODE" == "standalone" ]] && echo "true" || echo "false")
     
     # Install Node.js
     run_with_feedback \
-        "sudo apt-get install -y nodejs" \
+        "apt-get install -y nodejs" \
         "Node.js v${target_version} installed successfully" \
         "Failed to install Node.js v${target_version}" \
-        true true
-}
-
-# ---------------------------------------------------------------------------
-# Helper   install Node.js with version checking
-# ---------------------------------------------------------------------------
-install_nodejs_with_version_check() {
-    local min_required_version="${MIN_NODE_VERSION:-18.5.0}"
-    local target_version="${NODE_VERSION:-20}"
-    
-    show_info "Checking Node.js installation (minimum required: v${min_required_version})..."
-    
-    if command -v node >/dev/null 2>&1; then
-        local current_version=$(node --version 2>/dev/null)
-        show_info "Found Node.js ${current_version}"
-        
-        if check_node_version "$min_required_version" "$current_version"; then
-            show_success "Node.js ${current_version} meets minimum requirement (v${min_required_version})"
-            
-            # Check if npm is available
-            if command -v npm >/dev/null 2>&1; then
-                local npm_version=$(npm --version 2>/dev/null)
-                show_info "npm ${npm_version} is available"
-                return 0
-            else
-                show_warning "npm not found, installing..."
-                install_if_missing npm
-                return $?
-            fi
-        else
-            show_warning "Node.js ${current_version} is below minimum required version v${min_required_version}"
-            show_info "Upgrading to Node.js v${target_version}..."
-            install_nodejs_nodesource
-        fi
-    else
-        show_info "Node.js not found, installing v${target_version}..."
-        install_nodejs_nodesource
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# Helper   install Node Version Manager (nvm) as alternative
-# ---------------------------------------------------------------------------
-install_nvm() {
-    local nvm_version="${NVM_VERSION:-0.39.0}"
-    
-    if [ -s "$HOME/.nvm/nvm.sh" ]; then
-        show_info "NVM is already installed"
-        return 0
-    fi
-    
-    show_info "Installing Node Version Manager (nvm) v${nvm_version}..."
-    run_with_feedback \
-        "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${nvm_version}/install.sh | bash" \
-        "NVM installed successfully" \
-        "Failed to install NVM" \
-        true true
-    
-    # Source nvm for current session
-    export NVM_DIR="$HOME/.nvm"
-    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-    [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
-}
-
-# ---------------------------------------------------------------------------
-# Helper   install Node.js via NVM with specific version
-# ---------------------------------------------------------------------------
-install_nodejs_via_nvm() {
-    local target_version="${NODE_VERSION:-20}"
-    
-    # Install NVM first
-    install_nvm
-    
-    # Source nvm
-    export NVM_DIR="$HOME/.nvm"
-    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-    
-    if ! command -v nvm >/dev/null 2>&1; then
-        show_error "NVM installation failed or not properly sourced"
-        return 1
-    fi
-    
-    show_info "Installing Node.js v${target_version} via NVM..."
-    run_with_feedback \
-        "nvm install ${target_version} && nvm use ${target_version} && nvm alias default ${target_version}" \
-        "Node.js v${target_version} installed and set as default via NVM" \
-        "Failed to install Node.js v${target_version} via NVM" \
-        true true
-}
-
-# ---------------------------------------------------------------------------
-# Main installation function with k3s offline preparation
-# ---------------------------------------------------------------------------
-install_dependencies() {
-    local CURRENT_DIR="$1"
-    local DK_USER="$2"
-    
-    echo -e "${BLUE}${BOLD}Installing System Dependencies${NC}"
-    echo -e "${DIM}This will install all required packages and tools for dreamOS and k3s${NC}"
-    echo
-    
-    # 0) Update repositories first (only once)
-    show_info "Updating package repositories..."
-    update_package_index
-    
-    # 1) Git
-    show_info "Checking Git installation..."
-    install_if_missing git
-    
-    # 2) Docker (package: docker.io)
-    show_info "Checking Docker installation..."
-    install_if_missing docker docker.io
-    
-    # Configure Docker service
-    show_info "Configuring Docker service..."
-    configure_docker_service "$DK_USER"
-    
-    # 3) SSH utilities
-    show_info "Installing SSH utilities..."
-    install_if_missing sshpass
-    
-    # 4) Node.js and npm with version management
-    show_info "Installing Node.js development tools with version management..."
-    
-    # Try NodeSource first, fallback to NVM if needed
-    if ! install_nodejs_with_version_check; then
-        show_warning "NodeSource installation failed, trying NVM..."
-        if ! install_nodejs_via_nvm; then
-            show_error "Both NodeSource and NVM installation methods failed"
-            show_info "Falling back to system package manager..."
-            install_if_missing npm
-        fi
-    fi
-    
-    # 5) k3s system dependencies and offline preparation
-    show_info "Installing k3s system dependencies..."
-    install_k3s_system_dependencies
-    
-    show_info "Preparing host for offline k3s operation..."
-    prepare_offline_k3s_tools
-    
-    # 6) Kubernetes tools
-    show_info "Installing Kubernetes management tools..."
-    install_k9s_if_missing
-    
-    # 7) Additional system utilities
-    show_info "Installing additional system utilities..."
-    install_system_utilities
-    
-    show_success "All system dependencies and k3s offline tools installed successfully"
+        $([[ "$SCRIPT_MODE" == "standalone" ]] && echo "true" || echo "false")
 }
 
 # Configure Docker service and user permissions
@@ -481,49 +380,22 @@ configure_docker_service() {
     else
         show_info "Starting Docker service..."
         run_with_feedback \
-            "sudo systemctl enable --now docker" \
+            "systemctl enable --now docker" \
             "Docker service enabled and started" \
-            "Failed to start Docker service" \
-            true true
+            "Failed to start Docker service"
     fi
 
-    # Add current user to docker group (so `docker` can be run without sudo)
+    # Add current user to docker group
     if groups "$user" | grep -q '\bdocker\b'; then
         show_info "User $user is already in the docker group"
     else
         show_info "Adding user to Docker group..."
         run_with_feedback \
-            "sudo usermod -aG docker $user" \
-            "Added $user to docker group (log out/in for it to take effect)" \
-            "Failed to add $user to docker group" \
-            false true
+            "usermod -aG docker $user" \
+            "Added $user to docker group (logout/login for effect)" \
+            "Failed to add $user to docker group"
         
         show_warning "Group changes will take effect after logout/login"
-    fi
-}
-
-# Install k9s if missing
-install_k9s_if_missing() {
-    if command -v k9s >/dev/null 2>&1; then
-        show_info "k9s is already installed"
-        local version=$(k9s version --short 2>/dev/null | head -n1 || echo "unknown")
-        local arch=$(uname -m)
-        show_info "Current k9s version: ${BOLD}$version${NC} (${arch})"
-    else
-        show_info "Installing k9s Kubernetes management tool for Jetson Orin..."
-        if install_k9s; then
-            # Verify the installation worked
-            if command -v k9s >/dev/null 2>&1; then
-                local installed_version=$(k9s version --short 2>/dev/null | head -n1 || echo "unknown")
-                show_success "k9s installed successfully: ${BOLD}$installed_version${NC}"
-            else
-                show_error "k9s installation completed but command not found in PATH"
-                return 1
-            fi
-        else
-            show_error "k9s installation failed"
-            return 1
-        fi
     fi
 }
 
@@ -533,7 +405,6 @@ install_system_utilities() {
         "curl"
         "wget"
         "jq"
-        "yq"
         "htop"
         "tree"
         "unzip"
@@ -546,15 +417,11 @@ install_system_utilities() {
     )
     
     for util in "${utilities[@]}"; do
-        case "$util" in
-            "yq")
-                install_yq_if_missing
-                ;;
-            *)
-                install_if_missing "$util"
-                ;;
-        esac
+        install_if_missing "$util"
     done
+    
+    # Install yq separately
+    install_yq_if_missing
 }
 
 # Install yq (YAML processor) if missing
@@ -577,112 +444,104 @@ install_yq_if_missing() {
         
         local URL="https://github.com/mikefarah/yq/releases/download/v${VERSION}/yq_linux_${ARCH}"
         run_with_feedback \
-            "sudo curl -fsSL \"${URL}\" -o /usr/local/bin/yq && sudo chmod +x /usr/local/bin/yq" \
+            "curl -fsSL \"${URL}\" -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq" \
             "yq installed successfully" \
             "Failed to install yq" \
-            true true
+            $([[ "$SCRIPT_MODE" == "standalone" ]] && echo "true" || echo "false")
     fi
 }
 
-# Verify all installations including k3s tools
-verify_dependencies() {
-    echo -e "\n${CYAN}${BOLD}Verifying Dependencies Installation:${NC}"
+# Main installation function
+install_dependencies() {
+    show_info "Starting dependencies installation for user: ${BOLD}${DK_USER}${NC}"
     
-    local tools=(
-        "git:Git version control"
-        "docker:Docker containerization"
-        "sshpass:SSH password authentication"
-        "node:Node.js runtime"
-        "npm:Node.js package manager"
-        "k9s:Kubernetes management"
-        "curl:HTTP client"
-        "jq:JSON processor"
-        "yq:YAML processor"
-        "nsenter:Namespace enter tool"
-        "ping:Network connectivity test"
-        "nc:Network connection tool"
-    )
+    # Update repositories first
+    update_package_index
     
-    local failed_tools=()
-
-    for tool_info in "${tools[@]}"; do
-        local tool="${tool_info%%:*}"
-        local description="${tool_info#*:}"
-        
+    # Core dependencies
+    show_info "Installing core dependencies..."
+    install_if_missing git
+    install_if_missing docker docker.io
+    install_if_missing sshpass
+    
+    # Configure Docker
+    configure_docker_service "$DK_USER"
+    
+    # Node.js
+    show_info "Installing Node.js..."
+    if ! command -v node >/dev/null 2>&1; then
+        install_nodejs_nodesource
+    else
+        show_info "Node.js already installed: $(node --version)"
+    fi
+    
+    # Ensure npm is available
+    install_if_missing npm
+    
+    # k3s dependencies and offline tools
+    show_info "Installing k3s system dependencies..."
+    install_k3s_system_dependencies
+    prepare_offline_k3s_tools
+    
+    # Kubernetes tools
+    show_info "Installing Kubernetes management tools..."
+    if ! command -v k9s >/dev/null 2>&1; then
+        install_k9s
+    else
+        show_info "k9s already installed: $(k9s version --short 2>/dev/null | head -n1)"
+    fi
+    
+    # System utilities
+    show_info "Installing system utilities..."
+    install_system_utilities
+    
+    show_success "Dependencies installation completed successfully!"
+    
+    # Quick verification
+    show_info "Verifying key installations..."
+    local key_tools=("git" "docker" "node" "npm" "k9s" "jq" "yq")
+    local failed_count=0
+    
+    for tool in "${key_tools[@]}"; do
         if command -v "$tool" >/dev/null 2>&1; then
-            local version=$(get_tool_version "$tool")
-            echo -e "${GREEN} ${CHECKMARK} ${tool}: ${BOLD}${version}${NC} ${DIM}(${description})${NC}"
+            show_success "$tool: installed"
         else
-            echo -e "${RED} ${CROSS} ${tool}: ${BOLD}NOT FOUND${NC} ${DIM}(${description})${NC}"
-            failed_tools+=("$tool")
+            show_error "$tool: missing"
+            ((failed_count++))
         fi
     done
     
-    # Verify k3s tools directory
-    echo -e "\n${CYAN}${BOLD}Verifying k3s Offline Tools:${NC}"
-    local k3s_tools_dir="/opt/k3s-tools/bin"
-    if [ -d "$k3s_tools_dir" ]; then
-        local tool_count=$(sudo find "$k3s_tools_dir" -type f -executable 2>/dev/null | wc -l)
-        echo -e "${GREEN} ${CHECKMARK} k3s-tools: ${BOLD}${tool_count} tools${NC} ${DIM}(offline operation support)${NC}"
+    # Check k3s tools
+    if [ -d "/opt/k3s-tools/bin" ]; then
+        local tool_count=$(find "/opt/k3s-tools/bin" -type f -executable 2>/dev/null | wc -l)
+        show_success "k3s offline tools: $tool_count tools ready"
     else
-        echo -e "${RED} ${CROSS} k3s-tools: ${BOLD}NOT FOUND${NC} ${DIM}(offline operation support)${NC}"
-        failed_tools+=("k3s-tools")
+        show_error "k3s offline tools: missing"
+        ((failed_count++))
     fi
     
-    if [ ${#failed_tools[@]} -eq 0 ]; then
-        echo -e "\n${GREEN}${BOLD}${CHECKMARK} All dependencies and k3s offline tools verified successfully!${NC}"
+    if [ $failed_count -eq 0 ]; then
+        show_success "All dependencies verified successfully!"
         return 0
     else
-        echo -e "\n${RED}${BOLD}${CROSS} Failed tools: ${failed_tools[*]}${NC}"
+        show_error "$failed_count dependencies failed verification"
         return 1
     fi
 }
 
-# Get version information for tools
-get_tool_version() {
-    local tool="$1"
-    case "$tool" in
-        "git")
-            git --version 2>/dev/null | awk '{print $3}' || echo "unknown"
-            ;;
-        "docker")
-            docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo "unknown"
-            ;;
-        "npm")
-            npm --version 2>/dev/null || echo "unknown"
-            ;;
-        "k9s")
-            k9s version --short 2>/dev/null | head -n1 || echo "unknown"
-            ;;
-        "curl"|"jq"|"yq")
-            $tool --version 2>/dev/null | head -n1 | awk '{print $NF}' || echo "unknown"
-            ;;
-        "nsenter"|"ping"|"nc")
-            if command -v "$tool" >/dev/null 2>&1; then
-                echo "installed"
-            else
-                echo "not found"
-            fi
-            ;;
-        *)
-            echo "installed"
-            ;;
-    esac
-}
-
-# Main execution function
+# Main execution
 main() {
-    # Source the functions if this script is run directly
-    if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-        echo "This script should be called from dk_install.sh"
+    # Ensure we're running as root for system-wide installations
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}${BOLD}This script must be run as root (use sudo)${NC}"
         exit 1
     fi
     
-    install_dependencies "$@"
-    verify_dependencies
+    install_dependencies
+    exit $?
 }
 
-# Export functions for use by parent script
-export -f install_dependencies configure_docker_service install_k9s_if_missing
-export -f install_system_utilities install_yq_if_missing verify_dependencies
-export -f prepare_offline_k3s_tools install_k3s_system_dependencies
+# Run main function if executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

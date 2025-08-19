@@ -322,21 +322,6 @@ show_parsed_manifest() {
     fi
 }
 
-# Function to source sub-scripts
-source_subscript() {
-    local script_name="$1"
-    local script_path="$CURRENT_DIR/scripts/$script_name"
-    
-    if [ -f "$script_path" ]; then
-        show_info "Loading ${BOLD}${script_name}${NC}..."
-        source "$script_path"
-        return 0
-    else
-        show_error "Required script not found: $script_path"
-        return 1
-    fi
-}
-
 run_with_feedback() {
     local command=$1
     local success_msg=$2
@@ -488,20 +473,19 @@ main() {
     
     run_with_feedback "docker network create dk_network 2>/dev/null || true" "Docker network 'dk_network' ready" "Network setup encountered issues"
     
-    # Step 6: Dependencies Installation (moved to sub-script)
+    # Step 6: Dependencies Installation
     show_step 6 "Dependencies" "Installing required system utilities and tools"
-    
-    # Source and execute dependencies installation script
-    if source_subscript "install_dependencies.sh"; then
-        install_dependencies "$CURRENT_DIR" "$DK_USER"
-        if [ $? -eq 0 ]; then
-            show_success "Dependencies installation completed"
-    else
-            show_error "Dependencies installation failed"
-            exit 1
-        fi
-    else
-        show_error "Failed to load dependencies installation script"
+
+    # Make the script executable first
+    chmod +x "$CURRENT_DIR/scripts/install_dependencies.sh"
+
+    run_with_feedback \
+        "sudo $CURRENT_DIR/scripts/install_dependencies.sh" \
+        "Dependencies installation completed" \
+        "Dependencies installation failed"
+
+    if [ $? -ne 0 ]; then
+        show_error "Dependencies installation failed. Please check the logs."
         exit 1
     fi
 
@@ -521,7 +505,7 @@ main() {
     # Step 8   K3s-based installation
     ###############################################################################
     show_step 8 "K3s-based installation" "k3s master installation & preparation for local registry"
-    sudo scripts/k3s-master-prepare.sh eth0
+    sudo scripts/k3s-master-prepare.sh br0
     if [ $? -ne 0 ]; then
         show_error "Failed to prepare K3s master. Please check the logs."
         exit 1
