@@ -93,6 +93,7 @@ Async::Chain* JobManager::createChainSafely()
     return chain;
 }
 
+// Enhanced deployment method to ensure fresh images
 Async::Job<JobManager::JobResult>* JobManager::deployService(const DeploymentInfo &info)
 {
     return createJobSafely<JobResult>([=]() -> JobResult {
@@ -101,26 +102,58 @@ Async::Job<JobManager::JobResult>* JobManager::deployService(const DeploymentInf
         emit jobStarted(QString("Deploy %1").arg(info.name));
         
         try {
-            // Check node ready if deploying
+            // Pre-deployment checks and cleanup
             if (info.subscribe) {
+                // Check node ready
                 bool nodeReady = false;
                 try { 
-                    nodeReady = Installer::nodeReady("vip", 5); 
+                    nodeReady = Installer::nodeReady("vip", 3); 
                 } catch(...) {}
                 
                 if (!nodeReady) {
                     result.errorMessage = "Worker node not ready. Deployment may fail.";
                     NOTIFY_WARNING("Deployment", result.errorMessage);
                 }
+                
+                // Force cleanup existing deployment for fresh start
+                qDebug() << "[JobManager] Forcing cleanup of existing deployment:" << info.id;
+                QString cleanupCmd = QString("kubectl delete deployment %1 -n default --ignore-not-found --wait=true").arg(info.id);
+                executeCommandsSync({cleanupCmd}); // Don't fail if cleanup fails
+                
+                // Wait for cleanup to complete
+                QThread::msleep(2000);
+                
+                // Clear any cached images to force fresh pull
+                QString imageClearCmd = QString("docker rmi $(docker images --format '{{.Repository}}:{{.Tag}}' | grep %1 | head -3) 2>/dev/null || true").arg(info.id);
+                executeCommandsSync({imageClearCmd}); // Don't fail if image removal fails
             }
             
-            // Prepare command
+            // Execute deployment command
             const QString cmd = info.subscribe 
                 ? QString("kubectl apply -f %1").arg(info.deploymentYaml)
                 : QString("kubectl delete -f %1 --ignore-not-found").arg(info.deploymentYaml);
             
-            // Execute command synchronously
             result = executeCommandsSync({cmd});
+            
+            // Post-deployment verification for subscriptions
+            if (result.success && info.subscribe) {
+                // Wait for deployment to be ready with timeout
+                QString waitCmd = QString("kubectl rollout status deployment/%1 --timeout=300s").arg(info.id);
+                JobResult waitResult = executeCommandsSync({waitCmd});
+                
+                if (!waitResult.success) {
+                    result.errorMessage = QString("Deployment applied but not ready: %1").arg(waitResult.errorMessage);
+                    qWarning() << "[JobManager] Deployment not ready:" << result.errorMessage;
+                } else {
+                    // Get the actual image being used for verification
+                    QString imageCmd = QString("kubectl get deployment %1 -o jsonpath='{.spec.template.spec.containers[0].image}'").arg(info.id);
+                    JobResult imageResult = executeCommandsSync({imageCmd});
+                    
+                    if (imageResult.success) {
+                        qDebug() << "[JobManager] Deployment" << info.id << "running image:" << imageResult.output.trimmed();
+                    }
+                }
+            }
             
             const QString action = info.subscribe ? "deployed" : "stopped";
             const QString message = QString("Service '%1' %2").arg(info.name, action);
@@ -130,7 +163,7 @@ Async::Job<JobManager::JobResult>* JobManager::deployService(const DeploymentInf
             if (result.success) {
                 NOTIFY_SUCCESS("Deployment", message);
             } else {
-                NOTIFY_ERROR("Deployment", QString("Failed to %1 %2: %3")
+                NOTIFY_WARNING("Deployment", QString("Failed to %1 %2: %3")
                     .arg(action, info.name, result.errorMessage));
             }
             
@@ -160,20 +193,66 @@ Async::Job<JobManager::JobResult>* JobManager::removeService(const QString &id, 
         emit jobStarted(QString("Remove %1").arg(id));
         
         try {
-            // Step 1: Delete deployment
-            const QString deleteCmd = QString("kubectl delete -f %1 --ignore-not-found").arg(deploymentYaml);
-            result = executeCommandsSync({deleteCmd});
+            QStringList cleanupCommands;
             
-            if (!result.success) {
-                result.errorMessage = "kubectl delete failed";
+            // Step 1: Scale deployment to 0 first (graceful shutdown)
+            cleanupCommands << QString("kubectl scale deployment %1 --replicas=0 -n default --ignore-not-found").arg(id);
+            
+            // Step 2: Wait for pods to terminate gracefully
+            cleanupCommands << QString("kubectl wait --for=delete pod -l app=%1 -n default --timeout=30s || true").arg(id);
+            
+            // Step 3: Force delete any remaining pods
+            cleanupCommands << QString("kubectl delete pods -l app=%1 -n default --force --grace-period=0 --ignore-not-found").arg(id);
+            
+            // Step 4: Delete the deployment
+            cleanupCommands << QString("kubectl delete -f %1 --ignore-not-found --wait=true").arg(deploymentYaml);
+            
+            // Step 5: Delete any related jobs (pull, mirror)
+            cleanupCommands << QString("kubectl delete job pull-%1 --ignore-not-found").arg(id);
+            cleanupCommands << QString("kubectl delete job mirror-%1 --ignore-not-found").arg(id);
+            
+            // Step 6: Clean up any configmaps or secrets (if they follow naming convention)
+            cleanupCommands << QString("kubectl delete configmap %1-config --ignore-not-found").arg(id);
+            cleanupCommands << QString("kubectl delete secret %1-secret --ignore-not-found").arg(id);
+            
+            // Step 7: Remove cached Docker images (both original and mirrored)
+            cleanupCommands << QString("docker rmi $(docker images --format '{{.Repository}}:{{.Tag}}' | grep %1 | head -5) 2>/dev/null || true").arg(id);
+            
+            // Execute all cleanup commands
+            for (const QString &cmd : cleanupCommands) {
+                qDebug() << "[JobManager] Executing cleanup:" << cmd;
+                JobResult cmdResult = executeCommandsSync({cmd});
+                
+                if (!cmdResult.success && !cmd.contains("--ignore-not-found") && !cmd.contains("|| true")) {
+                    qWarning() << "[JobManager] Cleanup command failed:" << cmd 
+                               << "Error:" << cmdResult.errorMessage;
+                    // Don't fail the entire operation for individual cleanup failures
+                }
+            }
+            
+            // Step 8: Final verification - ensure no resources remain
+            QString verifyCmd = QString("kubectl get all -l app=%1 -n default --no-headers 2>/dev/null | wc -l").arg(id);
+            JobResult verifyResult = executeCommandsSync({verifyCmd});
+            
+            if (verifyResult.success) {
+                int remainingResources = verifyResult.output.trimmed().toInt();
+                if (remainingResources > 0) {
+                    qWarning() << "[JobManager]" << remainingResources << "resources still remain for" << id;
+                    result.errorMessage = QString("Some resources may still remain (%1). Wait for service Stop first").arg(remainingResources);
+                    NOTIFY_WARNING("Removal", result.errorMessage);
+                } else {
+                    QString message = QString("All resources successfully removed for %1").arg(id);
+                    qDebug() << message;
+                    NOTIFY_SUCCESS("Removal", message);
+                }
             }
             
             emit jobFinished(QString("Remove %1").arg(id), result.success, 
-                result.success ? QString("%1 removed").arg(id) : result.errorMessage);
+                result.success ? QString("%1 completely removed").arg(id) : result.errorMessage);
             
         } catch (const std::exception &e) {
             result.success = false;
-            result.errorMessage = QString("Exception: %1").arg(e.what());
+            result.errorMessage = QString("Exception during removal: %1").arg(e.what());
             emit jobFinished(QString("Remove %1").arg(id), false, result.errorMessage);
         }
         
@@ -287,14 +366,18 @@ Async::Job<bool>* JobManager::checkNodeReady(const QString &nodeName, int timeou
 {
     return createJobSafely<bool>([=]() -> bool {
         try {
-            // Use a simpler, faster approach for node checking
-            const QString cmd = QString("kubectl get node %1 --no-headers -o custom-columns=STATUS:.status.conditions[?(@.type==\"Ready\")].status 2>/dev/null | grep -q True; echo $?")
-                .arg(nodeName);
+            // Simple command that works reliably
+            const QString cmd = QString("kubectl get node %1 --no-headers 2>/dev/null").arg(nodeName);
             
             JobResult result = executeCommandsSync({cmd});
             
-            // Check if the exit code indicates success (node ready)
-            bool ready = result.success && result.output.trimmed() == "0";
+            if (!result.success) {
+                qDebug() << "[JobManager] Node" << nodeName << "not found or kubectl failed";
+                return false;
+            }
+            
+            // Check if output contains "Ready" status
+            bool ready = result.output.contains("Ready") && !result.output.contains("NotReady");
             
             qDebug() << "[JobManager] Node" << nodeName << "ready check:"
                      << ". Success:" << result.success 

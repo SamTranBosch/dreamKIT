@@ -176,6 +176,40 @@ docker_pull_with_info() {
     echo
 }
 
+force_deployment_update() {
+    local deployment_name=$1
+    local namespace=${2:-default}
+    local image_name=$3  # Optional: specific image to verify
+    
+    show_info "Forcing update for deployment: $deployment_name"
+    
+    # Step 1: Delete existing deployment to ensure fresh start
+    run_with_feedback \
+        "sudo kubectl delete deployment/$deployment_name -n $namespace --ignore-not-found --wait=true" \
+        "Existing deployment removed" \
+        "Deployment cleanup completed"
+    
+    # Step 2: Wait for complete cleanup
+    show_info "Waiting for cleanup to complete..."
+    sleep 3
+    
+    # Step 3: Verify pods are terminated
+    local pod_count=$(kubectl get pods -l app=$deployment_name -n $namespace --no-headers 2>/dev/null | wc -l)
+    if [ "$pod_count" -gt 0 ]; then
+        show_warning "Force deleting remaining pods..."
+        kubectl delete pods -l app=$deployment_name -n $namespace --force --grace-period=0 --ignore-not-found
+        sleep 5
+    fi
+    
+    # Step 4: Clear any cached images if specified
+    if [ -n "$image_name" ]; then
+        show_info "Clearing cached image: $image_name"
+        docker rmi "$image_name" 2>/dev/null || true
+    fi
+    
+    return 0
+}
+
 apply_manifest() {
     # -----------------------------------------------------------------
     # make all placeholders available to envsubst
@@ -224,6 +258,41 @@ apply_manifest() {
     else
         show_error "Failed to parse manifest ${yaml}"
         return 1
+    fi
+}
+
+# Enhanced manifest application with force update
+apply_manifest_with_force_update() {
+    local yaml="$1"
+    local deployment_name="$2"
+    local image_name="$3"  # Optional
+    
+    # Step 1: Force update if deployment exists
+    if kubectl get deployment "$deployment_name" -n default >/dev/null 2>&1; then
+        show_info "Deployment exists, forcing update..."
+        force_deployment_update "$deployment_name" "default" "$image_name"
+    fi
+    
+    # Step 2: Apply manifest
+    apply_manifest "$yaml"
+    
+    # Step 3: Wait for deployment with extended timeout
+    run_with_feedback \
+        "sudo kubectl rollout status deployment/$deployment_name --timeout=600s" \
+        "$deployment_name is READY with latest image" \
+        "$deployment_name failed to start"
+    
+    # Step 4: Verify image version (if provided)
+    if [ -n "$image_name" ]; then
+        show_info "Verifying deployed image..."
+        local deployed_image=$(kubectl get deployment "$deployment_name" -o jsonpath='{.spec.template.spec.containers[0].image}')
+        show_info "Deployed image: $deployed_image"
+        
+        # Optional: Get image digest for verification
+        local image_digest=$(kubectl get deployment "$deployment_name" -o jsonpath='{.spec.template.spec.containers[0].image}' | xargs docker inspect --format='{{index .RepoDigests 0}}' 2>/dev/null || echo "N/A")
+        if [ "$image_digest" != "N/A" ]; then
+            show_info "Image digest: $image_digest"
+        fi
     fi
 }
 
@@ -493,46 +562,51 @@ main() {
     # Step 10   SDV Runtime
     ###############################################################################
     show_step 10 "SDV Runtime" "Setting up Software Defined Vehicle runtime environment"
-    
+
     # Export variables for sub-scripts
     export HOME_DIR
     export DK_USER
     scripts/setup_default_vss.sh
 
+    # Enhanced SDV Runtime deployment
+    show_info "Deploying SDV Runtime with force update..."
+
+    # Pull latest image first
     apply_manifest sdv-runtime-pull.yaml
     run_with_feedback \
+        "sudo kubectl wait --for=condition=complete --timeout=300s job/sdv-runtime-pull" \
+        "Latest SDV Runtime image pulled" \
+        "SDV Runtime image pull failed"
+
+    # Clean up pull job
+    run_with_feedback \
         "sudo kubectl delete job sdv-runtime-pull --ignore-not-found" \
-        "Pull latest sdv-runtime image" "Cleanup warning"
+        "Pull job cleaned up" \
+        "Cleanup completed"
 
-    run_with_feedback \
-    "sudo kubectl delete deployment sdv-runtime --ignore-not-found" \
-    "Removed existing SDV runtime (if any)" "Cleanup warning"
+    # Apply with force update
+    apply_manifest_with_force_update "sdv-runtime.yaml" "sdv-runtime" "${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest"
 
-    apply_manifest sdv-runtime.yaml
-    run_with_feedback \
-    "sudo kubectl rollout status deployment/sdv-runtime" \
-    "SDV runtime is READY" \
-    "SDV runtime failed to start"
-    
     ###############################################################################
     # Step 11   DreamKit Manager
     ###############################################################################
     show_step 11 "DreamKit Manager" "Installing core management services"
 
+    # Pull latest image first
     apply_manifest dk-manager-pull.yaml
     run_with_feedback \
+        "sudo kubectl wait --for=condition=complete --timeout=300s job/dk-manager-pull" \
+        "Latest DreamKit Manager image pulled" \
+        "DreamKit Manager image pull failed"
+
+    # Clean up pull job
+    run_with_feedback \
         "sudo kubectl delete job dk-manager-pull --ignore-not-found" \
-        "Pull latest dk-manager image" "Cleanup warning"
+        "Pull job cleaned up" \
+        "Cleanup completed"
 
-    run_with_feedback \
-    "sudo kubectl delete deployment dk-manager --ignore-not-found" \
-    "Removed existing manager (if any)" "Cleanup warning"
-
-    apply_manifest dk-manager.yaml
-    run_with_feedback \
-    "sudo kubectl rollout status deployment/dk-manager" \
-    "DreamKit Manager is READY" \
-    "Manager failed to start"
+    # Apply with force update
+    apply_manifest_with_force_update "dk-manager.yaml" "dk-manager" "${DOCKER_HUB_NAMESPACE}/dk-manager:latest"
 
     ###############################################################################
     # Step 12   IVI Interface (optional)
@@ -556,52 +630,25 @@ main() {
                             "X11 forwarding enabled" "X11 setup failed"
         run_with_feedback "xhost +local:docker" "Docker X11 access granted" "X11 access failed"
 
-        # Step 1: Clean up existing deployment first
-        show_info "Cleaning up existing IVI deployment..."
-        run_with_feedback \
-            "sudo kubectl delete deployment dk-ivi --ignore-not-found --wait=true" \
-            "Removed existing IVI deployment" "Cleanup warning"
-
-        # Step 2: Pull fresh image
-        show_info "Pulling latest IVI image..."
+        # Pull latest image first
         apply_manifest dk-ivi-pull.yaml
         run_with_feedback \
-            "sudo kubectl wait --for=condition=complete job/dk-ivi-pull" \
-            "Latest IVI image pulled successfully" "Image pull failed"
+            "sudo kubectl wait --for=condition=complete --timeout=300s job/dk-ivi-pull" \
+            "Latest IVI image pulled" \
+            "IVI image pull failed"
         
-        # Step 3: Clean up the pull job
+        # Clean up pull job
         run_with_feedback \
             "sudo kubectl delete job dk-ivi-pull --ignore-not-found" \
-            "Pull job cleaned up" "Cleanup warning"
+            "Pull job cleaned up" \
+            "Cleanup completed"
 
-        # Step 4: Get the image digest to force update (optional but recommended)
-        show_info "Getting image information..."
-        IVI_IMAGE_ID=$(docker images --format "table {{.Repository}}:{{.Tag}}\t{{.ID}}" | grep "${DOCKER_HUB_NAMESPACE}/dk_ivi:latest" | awk '{print $2}' | head -1)
-        if [ -n "$IVI_IMAGE_ID" ]; then
-            show_success "Image ID: $IVI_IMAGE_ID"
-        fi
-
-        # Step 5: Deploy with fresh image
-        show_info "Deploying IVI interface..."
-        # Decide which manifest to apply
+        # Decide which manifest to apply and force update
         if [ -f "/etc/nv_tegra_release" ]; then
-            apply_manifest dk-ivi-jetson.yaml
+            apply_manifest_with_force_update "dk-ivi-jetson.yaml" "dk-ivi" "${DOCKER_HUB_NAMESPACE}/dk_ivi:latest"
         else
-            apply_manifest dk-ivi.yaml
+            apply_manifest_with_force_update "dk-ivi.yaml" "dk-ivi" "${DOCKER_HUB_NAMESPACE}/dk_ivi:latest"
         fi
-
-        # Step 6: Wait for deployment with timeout
-        show_info "Waiting for IVI to be ready..."
-        run_with_feedback \
-            "sudo kubectl rollout status deployment/dk-ivi" \
-            "IVI interface is READY" \
-            "IVI failed to start"
-        
-        # Step 7: Verify the deployment is using the latest image
-        show_info "Verifying deployment..."
-        RUNNING_IMAGE=$(kubectl get deployment dk-ivi -o jsonpath='{.spec.template.spec.containers[0].image}')
-        show_info "Deployed image: $RUNNING_IMAGE"
-
     else
         show_info "IVI installation skipped (you can install later with './dk_install dk_ivi=true')"
     fi
