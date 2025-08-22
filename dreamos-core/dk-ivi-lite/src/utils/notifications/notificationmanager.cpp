@@ -58,16 +58,15 @@ QString NotificationManager::showNotification(const QString &title,
              << "Active count:" << m_activeNotifications.size()
              << "Queue size:" << m_queue.size();
 
-    // FIXED: Always add to history first, regardless of queue status
+    // Always add to history first
     addToHistory(data);
 
-    // FIXED: Better queue logic - check if we should queue this notification
+    // Check if we should queue this notification
     if (shouldQueue()) {
         qDebug() << "[NotificationManager] Queueing notification" << data.id 
                  << "- active count:" << m_activeNotifications.size();
         m_queue.enqueue(data);
         
-        // FIXED: Start queue processing immediately if not already running
         if (!m_queueTimer->isActive()) {
             startQueueProcessing();
         }
@@ -92,14 +91,10 @@ QString NotificationManager::showNotification(const QString &title,
                           static_cast<int>(data.level), data.duration, 
                           data.category, data.progress, data.actionText, data.actionId);
     
-    // FIXED: Auto-dismiss timer setup with better error handling
-    if (data.duration > 0) {
-        QTimer::singleShot(data.duration, this, [this, id = data.id](){
-            qDebug() << "[NotificationManager] Auto-dismissing notification:" << id;
-            dismissNotification(id);
-        });
-    }
-
+    // *** REMOVED: C++ auto-dismiss timer - let QML handle all timing ***
+    // The QML overlay will handle auto-dismiss timing to avoid race conditions
+    // and timer conflicts between C++ and QML layers
+    
     m_totalCount++;
     m_unreadCount++;
     emit totalNotificationsChanged();
@@ -185,8 +180,13 @@ QString NotificationManager::smartNotify(const QString &title,
                                         const QString &category,
                                         const QString &groupId)
 {
-    // FIXED: Less aggressive deduplication for frequent notifications
-    if (!groupId.isEmpty() && m_groupToNotificationMap.contains(groupId)) {
+    // SIMPLE FIX: If no groupId is provided, just create a new notification
+    if (groupId.isEmpty()) {
+        return showNotification(title, message, level, 5000, category);
+    }
+    
+    // Only do smart behavior when groupId is explicitly provided
+    if (m_groupToNotificationMap.contains(groupId)) {
         QString existingId = m_groupToNotificationMap[groupId];
         // Check if the existing notification is still active
         bool foundActive = false;
@@ -209,47 +209,9 @@ QString NotificationManager::smartNotify(const QString &title,
         }
     }
     
-    // FIXED: More lenient timing check for frequent notifications
-    QDateTime currentTime = QDateTime::currentDateTime();
-    if (m_lastNotificationTime.contains(category)) {
-        qint64 timeSinceLastMs = m_lastNotificationTime[category].msecsTo(currentTime);
-        if (timeSinceLastMs < m_minIntervalMs) {
-            // Try to find similar notification to update instead of blocking
-            QString similarId = findSimilarNotification(title, category);
-            if (!similarId.isEmpty()) {
-                return updateExisting(similarId, message, level);
-            }
-            // If no similar notification found, still allow the new one but with reduced priority
-        }
-    }
-    
-    // FIXED: Less aggressive batching
-    if (shouldBatch(category)) {
-        // Only batch if there are many rapid notifications
-        int recentCount = countRecentNotifications(category, 2000); // Last 2 seconds
-        if (recentCount >= 8) { // Increased threshold from 3 to 8
-            QString batchId = category + "_batch_" + QString::number(QDateTime::currentMSecsSinceEpoch());
-            startBatch(batchId);
-            addToBatch(batchId, title, message, level);
-            
-            // Auto-commit batch after delay
-            QTimer::singleShot(1500, this, [this, batchId]() {
-                commitBatch(batchId);
-            });
-            
-            return batchId;
-        }
-    }
-    
     // Create new notification
     QString notificationId = showNotification(title, message, level, 5000, category);
-    
-    // Update mappings
-    if (!groupId.isEmpty()) {
-        m_groupToNotificationMap[groupId] = notificationId;
-    }
-    m_lastNotificationTime[category] = currentTime;
-    m_categoryToNotificationMap[category] = notificationId;
+    m_groupToNotificationMap[groupId] = notificationId;
     
     return notificationId;
 }
@@ -616,22 +578,26 @@ QString NotificationManager::info(const QString &title, const QString &message, 
 {
     // Use smartNotify instead of direct showNotification for better handling
     return smartNotify(title, message, 0, category.isEmpty() ? "info" : category);
+    // return showNotification(title, message, 0, 2000, category.isEmpty() ? "info" : category);
 }
 
 QString NotificationManager::success(const QString &title, const QString &message, const QString &category)
 {
     return smartNotify(title, message, 1, category.isEmpty() ? "success" : category);
+    // return showNotification(title, message, 1, 2000, category.isEmpty() ? "success" : category);
 }
 
 QString NotificationManager::warning(const QString &title, const QString &message, const QString &category)
 {
     return smartNotify(title, message, 2, category.isEmpty() ? "warning" : category);
+    // return showNotification(title, message, 2, 2000, category.isEmpty() ? "warning" : category);
 }
 
 QString NotificationManager::error(const QString &title, const QString &message, const QString &category)
 {
     // Errors should always be shown immediately, bypass smart logic
-    return showNotification(title, message, 3, 0, category.isEmpty() ? "error" : category);
+    return showNotification(title, message, 3, 2000, category.isEmpty() ? "error" : category);
+    // return showNotification(title, message, 3, 2000, category.isEmpty() ? "error" : category);
 }
 
 // ───────────────────────────────────────────────────────────────
