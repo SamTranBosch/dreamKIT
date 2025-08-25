@@ -22,47 +22,51 @@ static QString writeFile(const QString &fn, const QString &txt)
 
 ManifestInfo ManifestBuilder::write(const AppInfo &app)
 {
-  ManifestInfo info;
-  QString rootDir = DK_CONTAINER_ROOT + "dk_marketplace/";
-  info.dir = QString("%1/%2").arg(rootDir, app.id);
-  
-  QDir().mkpath(info.dir);
-    
+    ManifestInfo info;
+    QString rootDir = DK_CONTAINER_ROOT + "dk_marketplace/";
+    info.dir = QString("%1/%2").arg(rootDir, app.id);
+    QDir().mkpath(info.dir);
+
     // ── dashboard JSON ──────────────────────────────────────────────
     info.dashboardJson = QString("%1/%2_dashboard.json")
-    .arg(info.dir, app.id);
+                             .arg(info.dir, app.id);
     JsonStorage::save(info.dashboardJson,
-    QJsonDocument(app.dashboardConfig.toJson()));
+                      QJsonDocument(app.dashboardConfig.toJson()));
 
     // ── target / node decision ──────────────────────────────────────
     QString nodeXIP = "xip";
     QString nodeVIP = "vip";
     QString target  = app.dashboardConfig.Target;
     QString node    = (target.isEmpty() || target == nodeXIP)
-    ? nodeXIP : nodeVIP;
+                        ? nodeXIP : nodeVIP;
     info.isRemoteNode = (node == nodeVIP);
     info.deployNodeName = (info.isRemoteNode ? nodeVIP : nodeXIP);
 
-    qDebug() << "[ManifestBuilder::write] Instaling on node:"
-    << info.deployNodeName
-    << "isRemoteNode:" << info.isRemoteNode;
-    const QString lcName = app.name.toLower();
+    qDebug() << "[ManifestBuilder::write] Installing on node:"
+             << info.deployNodeName
+             << "isRemoteNode:" << info.isRemoteNode;
+             
     const QString appId  = app.id;
     const QString image  = app.dashboardConfig.DockerImageURL;
 
     // ── volume mounts generation ────────────────────────────────────
     QStringList volumeMountLines;
     QStringList volumeLines;
+    bool hasAnyVolumes = false;
 
-    // Check if user wants custom volumes
-    bool hasCustomVolumes = false;
-
-    // Process custom volumes from RuntimeCfg
     auto &rcfg = app.dashboardConfig.RuntimeCfg;
     
     // Check if user explicitly wants host-dev access
     bool needsHostDev = rcfg.contains("hostDev") && rcfg.value("hostDev").toBool();
     if (needsHostDev) {
+        hasAnyVolumes = true;
+        
+        // Ensure /dev exists (should always exist, but just to be safe)
+        QString hostDevPath = "/dev";
+        if (!QDir(hostDevPath).exists()) {
+            qWarning() << "[ManifestBuilder] Host /dev directory does not exist!";
+        }
+        
         volumeMountLines << QString(
             "        - name: host-dev\n"
             "          mountPath: /host-dev\n"
@@ -77,27 +81,12 @@ ManifestInfo ManifestBuilder::write(const AppInfo &app)
         qDebug() << "[ManifestBuilder] Adding host-dev mount for app:" << app.id;
     }
 
+    // Process custom volumes from RuntimeCfg
     if (rcfg.contains("volumes")) {
         QJsonArray volumes = rcfg.value("volumes").toArray();
         if (!volumes.isEmpty()) {
-            hasCustomVolumes = true;
-            
-            // Create data directory only if user has custom volumes
-            QString dataDir = QString("%1/%2_data").arg(rootDir, app.id);
-            QDir().mkpath(dataDir);
-            info.dataDir = dataDir;
-            
-            // Add default app data directory mount when custom volumes exist
-            volumeMountLines << QString(
-                "        - name: app-data\n"
-                "          mountPath: /app/data\n"
-                "          readOnly: false");
-            
-            volumeLines << QString(
-                "      - name: app-data\n"
-                "        hostPath:\n"
-                "          path: %1\n"
-                "          type: DirectoryOrCreate").arg(dataDir);
+            hasAnyVolumes = true;
+            info.hasVolumes = true;
         }
         
         for (int i = 0; i < volumes.size(); ++i) {
@@ -107,14 +96,19 @@ ManifestInfo ManifestBuilder::write(const AppInfo &app)
             bool readOnly = vol.value("readOnly").toBool(false);
             
             if (hostPath.isEmpty() || mountPath.isEmpty()) {
-                qWarning() << "Invalid volume config at index" << i;
+                qWarning() << "[ManifestBuilder] Invalid volume config at index" << i 
+                          << "- missing hostPath or mountPath";
                 continue;
             }
             
-            QString volumeName = QString("custom-vol-%1").arg(i);
+            // Create host directory before mounting
+            if (!QDir().mkpath(hostPath)) {
+                qWarning() << "[ManifestBuilder] Failed to create host directory:" << hostPath;
+            } else {
+                qDebug() << "[ManifestBuilder] Created host directory:" << hostPath;
+            }
             
-            // Ensure host directory exists
-            QDir().mkpath(hostPath);
+            QString volumeName = QString("custom-vol-%1").arg(i);
             
             volumeMountLines << QString(
                 "        - name: %1\n"
@@ -128,18 +122,19 @@ ManifestInfo ManifestBuilder::write(const AppInfo &app)
                 "          path: %2\n"
                 "          type: DirectoryOrCreate")
                 .arg(volumeName, hostPath);
+                
+            qDebug() << "[ManifestBuilder] Added volume:" << hostPath << "->" << mountPath 
+                     << (readOnly ? "(RO)" : "(RW)");
         }
     }
 
-    const QString volumeMountsBlock = volumeMountLines.join("\n");
-    const QString volumesBlock = volumeLines.join("\n");
-
-    // ── environment and args blocks (existing code) ─────────────────
+    // ── environment and args blocks ─────────────────────────────────
     QStringList envLines;
     for (auto it = rcfg.begin(); it != rcfg.end(); ++it) {
         if (it.key() == QLatin1String("node") ||
             it.key() == QLatin1String("args") ||
-            it.key() == QLatin1String("volumes"))  // Skip volumes in env
+            it.key() == QLatin1String("volumes") ||
+            it.key() == QLatin1String("hostDev"))  // Skip special keys
             continue;
         envLines << QString(
             "            - name: %1\n"
@@ -157,8 +152,8 @@ ManifestInfo ManifestBuilder::write(const AppInfo &app)
                            ? "           # no args"
                            : argLines.join("\n");
 
-    // ── enhanced deployment yaml template ──────────────────────────
-    static const char *deployTpl = R"(apiVersion: apps/v1
+    // ── deployment yaml template ───────────────────────────────────
+    QString deployTpl = R"(apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ${name}
@@ -222,7 +217,7 @@ ${volume_mounts_section}
 ${volumes_section}
 )";
 
-    // Generate conditional sections based on whether we have custom volumes
+    // Generate conditional sections
     QString argsSection;
     if (!argLines.isEmpty()) {
         argsSection = QString("        args:\n%1").arg(argBlock);
@@ -231,29 +226,26 @@ ${volumes_section}
     QString volumeMountsSection;
     QString volumesSection; 
     
-    // Always add basic tmpfs mounts to handle read-only filesystem issues
-    QStringList basicMounts;
-    QStringList basicVolumes;
+    // Always add basic tmpfs mounts for containers with read-only filesystems
+    QStringList allMounts;
+    QStringList allVolumes;
     
-    basicMounts << QString(
+    allMounts << QString(
         "        - name: tmp\n"
         "          mountPath: /tmp");
-    basicMounts << QString(
+    allMounts << QString(
         "        - name: var-tmp\n"
         "          mountPath: /var/tmp");
     
-    basicVolumes << QString(
+    allVolumes << QString(
         "      - name: tmp\n"
         "        emptyDir: {}");
-    basicVolumes << QString(
+    allVolumes << QString(
         "      - name: var-tmp\n"
         "        emptyDir: {}");
 
-    // Combine basic mounts with custom mounts
-    QStringList allMounts = basicMounts;
-    QStringList allVolumes = basicVolumes;
-    
-    if (hasCustomVolumes || needsHostDev) {
+    // Add custom volumes if any exist
+    if (hasAnyVolumes) {
         allMounts.append(volumeMountLines);
         allVolumes.append(volumeLines);
     }
@@ -261,7 +253,7 @@ ${volumes_section}
     volumeMountsSection = QString("        volumeMounts:\n%1").arg(allMounts.join("\n"));
     volumesSection = QString("      volumes:\n%1").arg(allVolumes.join("\n"));
 
-    QString deployYaml = QString(deployTpl)
+    QString deployYaml = deployTpl
             .replace("${name}",                  appId)
             .replace("${node}",                  node)
             .replace("${image}",                 image)
@@ -302,19 +294,19 @@ spec:
 
     // ── mirror job yaml (only if remote) ────────────────────────────
     if (info.isRemoteNode) {
-      const auto parts = image.split('/', Qt::SkipEmptyParts);
-      QString rest;
-      
-      // Check if first part looks like a registry (contains '.' or ':')
-      if (parts.size() > 1 && (parts[0].contains('.') || parts[0].contains(':'))) {
-          // Has registry prefix, skip it
-          rest = parts.mid(1).join('/');
-      } else {
-          // No registry prefix, keep the whole image name
-          rest = image;
-      }
-      
-      const QString mirrorImg = QString("localhost:5000/%1").arg(rest);      
+        const auto parts = image.split('/', Qt::SkipEmptyParts);
+        QString rest;
+        
+        // Check if first part looks like a registry (contains '.' or ':')
+        if (parts.size() > 1 && (parts[0].contains('.') || parts[0].contains(':'))) {
+            // Has registry prefix, skip it
+            rest = parts.mid(1).join('/');
+        } else {
+            // No registry prefix, keep the whole image name
+            rest = image;
+        }
+        
+        const QString mirrorImg = QString("localhost:5000/%1").arg(rest);      
 
         static const char *mirrorTpl = R"(apiVersion: batch/v1
 kind: Job
@@ -347,5 +339,6 @@ spec:
         info.mirrorJobYaml = writeFile(
             QString("%1/%2_mirror.yaml").arg(info.dir, app.id), mirrorYaml);
     }
+    
     return info;
 }
