@@ -318,7 +318,7 @@ void MarketplaceViewModel::confirmInstall()
         }
 
         cmds << QString("kubectl apply -f %1").arg(m_lastManifest.pullJobYaml)
-            << QString("kubectl wait --for=condition=complete job/pull-%1 --timeout=600s").arg(app.id);
+            << QString("kubectl wait --for=condition=complete job/pull-%1 --timeout=1200s").arg(app.id);
 
         /* Execute via JobManager - create job in main thread */
         bool ok = false;

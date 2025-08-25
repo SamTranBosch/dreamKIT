@@ -470,8 +470,8 @@ void InstalledAsyncBase<TI,TD>::onWlanStatusChanged(bool connected)
     // Only notify if status actually changed
     if (wasConnected != connected) {
         if (connected) {
-            NOTIFY_SUCCESS("Internet", "Connection restored - auto-restart may begin");
-            qDebug() << "[InstalledAsyncBase] Internet connection restored";
+            // NOTIFY_SUCCESS("Internet", "Connection restored - auto-restart may begin");
+            // qDebug() << "[InstalledAsyncBase] Internet connection restored";
         } else {
             NOTIFY_WARNING("Internet", "Connection lost - services may be affected");
             qDebug() << "[InstalledAsyncBase] Internet connection lost";

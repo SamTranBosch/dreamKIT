@@ -10,13 +10,15 @@ namespace K3s {
 
 struct ManifestInfo
 {
-    QString dir;               // <root>/<appId>
+    QString dir;               // <root>/<appId> - for manifests
+    QString dataDir;           // <root>/<appId>_data - only created if volumes needed
     QString dashboardJson;
     QString deploymentYaml;
     QString pullJobYaml;
     QString mirrorJobYaml;
-    QString deployNodeName = "xip"; // default for local apps
+    QString deployNodeName = "xip";
     bool    isRemoteNode = false;
+    bool    hasVolumes = false;    // indicates if custom volumes were configured
 };
 
 class ManifestBuilder

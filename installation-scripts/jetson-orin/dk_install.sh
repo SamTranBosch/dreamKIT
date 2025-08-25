@@ -278,7 +278,7 @@ apply_manifest_with_force_update() {
     
     # Step 3: Wait for deployment with extended timeout
     run_with_feedback \
-        "sudo kubectl rollout status deployment/$deployment_name --timeout=600s" \
+        "sudo kubectl rollout status deployment/$deployment_name" \
         "$deployment_name is READY with latest image" \
         "$deployment_name failed to start"
     
@@ -558,7 +558,7 @@ main() {
     # Pull latest image first
     apply_manifest sdv-runtime-pull.yaml
     run_with_feedback \
-        "sudo kubectl wait --for=condition=complete --timeout=300s job/sdv-runtime-pull" \
+        "sudo kubectl wait --for=condition=complete job/sdv-runtime-pull" \
         "Latest SDV Runtime image pulled" \
         "SDV Runtime image pull failed"
 
@@ -579,7 +579,7 @@ main() {
     # Pull latest image first
     apply_manifest dk-manager-pull.yaml
     run_with_feedback \
-        "sudo kubectl wait --for=condition=complete --timeout=300s job/dk-manager-pull" \
+        "sudo kubectl wait --for=condition=complete job/dk-manager-pull" \
         "Latest DreamKit Manager image pulled" \
         "DreamKit Manager image pull failed"
 
@@ -617,7 +617,7 @@ main() {
         # Pull latest image first
         apply_manifest dk-ivi-pull.yaml
         run_with_feedback \
-            "sudo kubectl wait --for=condition=complete --timeout=300s job/dk-ivi-pull" \
+            "sudo kubectl wait --for=condition=complete job/dk-ivi-pull" \
             "Latest IVI image pulled" \
             "IVI image pull failed"
         
