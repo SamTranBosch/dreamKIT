@@ -230,6 +230,12 @@ QStringList InstallationWorker::buildInstallationCommands(const AppInfo &app, co
     qDebug() << "[InstallationWorker] Manifest - pullJobYaml:" << manifest.pullJobYaml;
     qDebug() << "[InstallationWorker] Manifest - mirrorJobYaml:" << manifest.mirrorJobYaml;
     
+    // Cleanup jobs to ensure environment is clean
+    if (1) {
+        emit installationProgress("Cleaning up installation jobs...");
+        commands << QString("kubectl delete job mirror-%1 pull-%1 --ignore-not-found").arg(app.id);
+    }
+
     // Node readiness check (lightweight)
     if (manifest.isRemoteNode) {
         emit installationProgress("Checking remote node availability...");
