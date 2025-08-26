@@ -3,6 +3,9 @@
 #include <QTimer>
 #include <QJsonArray>
 #include <QEventLoop>
+#include <QCryptographicHash>
+#include <QDateTime>
+#include <QMutex>
 
 #include "../utils/async/asyncjob.hpp"
 #include "../utils/core/datamanager.hpp"
@@ -32,6 +35,7 @@ public:
     Q_INVOKABLE void initInstalledFromDB();
     Q_INVOKABLE void executeServices(int idx, const QString&, const QString id, bool subscribe);
     Q_INVOKABLE void removeServices(int idx);
+    Q_INVOKABLE void refreshServiceStatus();  // Manual status refresh
     Q_INVOKABLE virtual void openAppEditor(int) { }          // optional
 
     // Status accessors
@@ -68,16 +72,51 @@ private slots:
     void onNodeStatusChanged(bool online);
     void onWlanStatusChanged(bool connected);
     void onJobFinished(const QString &operation, bool success, const QString &message);
-    void checkRunningAppSts();
+    
+    // Optimized file monitoring slots
+    void onFileHashChanged();
+    void performCachedStatusUpdate();
 
 private:
+    // Enhanced deployment status structure
+    struct DeploymentStatus {
+        QString id;
+        bool isRunning = false;
+        QDateTime lastChecked;
+        QDateTime lastStatusChange;
+        int consecutiveFailures = 0;
+        bool hasValidCache = false;
+        
+        // Constructor
+        DeploymentStatus() = default;
+        DeploymentStatus(const QString& deploymentId) : id(deploymentId) {}
+        
+        // Check if cache is still valid
+        bool isCacheValid(int maxAgeMs = 10000) const {
+            return hasValidCache && 
+                   lastChecked.isValid() && 
+                   lastChecked.msecsTo(QDateTime::currentDateTime()) < maxAgeMs;
+        }
+    };
+
     void updateInstalledList(const QJsonArray&);
     void initializeMonitoring();
     void cleanupMonitoring();
+    
+    // Optimized file monitoring with MD5
+    void initializeFileMonitoring();
+    QString calculateFileHash(const QString &filePath);
+    
+    // Enhanced status caching system
+    void initializeStatusCaching();
+    void updateDeploymentStatusCache();
+    void applyStatusUpdatesToUI();
+    void invalidateStatusCache();
+    void triggerStatusUpdateIfNeeded();
 
+    // Core data
     QList<TI>             m_items;
     InstalledCheckThread *m_checkThread {nullptr};
-    QTimer               *m_stsTimer    {nullptr};
     
     // Extracted functionality
     WlanMonitor          *m_wlanMonitor      {nullptr};
@@ -87,12 +126,25 @@ private:
     // Status tracking
     bool                  m_nodeOnline  {true};
     bool                  m_wlanOnline  {false};
-    // Node check state
     bool                  m_nodeCheckInProgress {false};
     QDateTime             m_lastNodeCheck;
 
-    struct StRec { QString id; bool ok; int idx; };
-    QList<StRec>          m_last;
+    // Optimized file monitoring with MD5
+    QString               m_watchedFilePath;
+    QString               m_lastFileHash;
+    QTimer               *m_fileHashTimer   {nullptr};
+    bool                  m_isBootup        {true};
+    
+    // Enhanced cached deployment status system
+    QHash<QString, DeploymentStatus> m_deploymentStatusCache;
+    QMutex                m_cacheMutex;
+    bool                  m_statusUpdateInProgress {false};
+    bool                  m_autoStatusUpdatesEnabled {true};
+    
+    // Configuration
+    static constexpr int FILE_HASH_CHECK_INTERVAL = 3000;    // 3 seconds (reduced frequency)
+    static constexpr int CACHE_VALIDITY_DURATION = 10000;    // 10 seconds
+    static constexpr int MAX_CONSECUTIVE_FAILURES = 3;
 };
 
 /********************************************************************
@@ -100,6 +152,7 @@ private:
  *******************************************************************/
 #include <QMetaObject>
 #include <QThread>
+#include <QFileInfo>
 #include <stdexcept>
 
 /* ------------ ctor -------------------------------------------- */
@@ -115,16 +168,17 @@ InstalledAsyncBase<TI,TD>::InstalledAsyncBase(QObject *parent)
     connect(m_jobManager, &K3s::JobManager::jobFinished,
             this, &InstalledAsyncBase::onJobFinished);
 
+    // Initialize optimized file monitoring timer
+    m_fileHashTimer = new QTimer(this);
+    m_fileHashTimer->setSingleShot(false);
+    m_fileHashTimer->setInterval(FILE_HASH_CHECK_INTERVAL);
+    connect(m_fileHashTimer, &QTimer::timeout,
+            this, &InstalledAsyncBase::onFileHashChanged);
+
     // Initialize monitoring after the base constructor knows the v-table
     QTimer::singleShot(0, this, [this](){
         initializeMonitoring();
     });
-
-    /* deployment-status timer (always on) */
-    m_stsTimer = new QTimer(this);
-    connect(m_stsTimer, &QTimer::timeout,
-            this, &InstalledAsyncBase::checkRunningAppSts);
-    m_stsTimer->start(5'000);
 }
 
 /* ------------ dtor --------------------------------------------- */
@@ -138,17 +192,13 @@ InstalledAsyncBase<TI,TD>::~InstalledAsyncBase()
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::initializeMonitoring()
 {
-    // 1) File monitoring (always needed)
-    const QString jf = folderRoot() + "installed"
-                    + QString(fileName()).remove("vehicle-") + "s.json";
-    qDebug() << "[InstalledAsyncBase] Watching file:" << jf;
-    m_checkThread = new InstalledCheckThread(static_cast<TD*>(this), jf, this);
-    connect(m_checkThread, &InstalledCheckThread::resultReady,
-            static_cast<TD*>(this), &TD::handleResults,
-            Qt::QueuedConnection);
-    m_checkThread->start();
+    // 1) Initialize file monitoring with MD5
+    initializeFileMonitoring();
+    
+    // 2) Initialize status caching system
+    initializeStatusCaching();
 
-    // 2) WLAN monitoring (if requested)
+    // 3) WLAN monitoring (if requested) - simplified
     if (wantsWlanMonitor()) {
         m_wlanMonitor = new WlanMonitor(this);
         m_wlanMonitor->setCheckInterval(30000); // 30 seconds
@@ -159,7 +209,7 @@ void InstalledAsyncBase<TI,TD>::initializeMonitoring()
         qDebug() << "[InstalledAsyncBase] WLAN monitoring enabled";
     }
 
-    // 3) Auto-restart functionality (if requested)
+    // 4) Auto-restart functionality (if requested)
     if (wantsAutoRestart()) {
         m_autoRestartMgr = new AutoRestartManager(this);
         m_autoRestartMgr->setWlanMonitor(m_wlanMonitor);
@@ -168,7 +218,7 @@ void InstalledAsyncBase<TI,TD>::initializeMonitoring()
         qDebug() << "[InstalledAsyncBase] Auto-restart functionality enabled";
     }
 
-    // 4) Node monitoring (if requested) - With caching to prevent excessive calls
+    // 5) Node monitoring (if requested) - optimized with better caching
     if (wantsNodeMonitor()) {
         auto *nodeTimer = new QTimer(this);
         nodeTimer->setSingleShot(false);
@@ -176,13 +226,12 @@ void InstalledAsyncBase<TI,TD>::initializeMonitoring()
         connect(nodeTimer, &QTimer::timeout, this, [this]() {
             // Skip if a check is already in progress
             if (m_nodeCheckInProgress) {
-                qDebug() << "[InstalledAsyncBase] Node check already in progress, skipping";
                 return;
             }
             
-            // Skip if we checked recently (within last 8 seconds)
+            // Skip if we checked recently (within last 15 seconds)
             if (m_lastNodeCheck.isValid() && 
-                m_lastNodeCheck.msecsTo(QDateTime::currentDateTime()) < 8000) {
+                m_lastNodeCheck.msecsTo(QDateTime::currentDateTime()) < 15000) {
                 return;
             }
             
@@ -198,6 +247,11 @@ void InstalledAsyncBase<TI,TD>::initializeMonitoring()
                     qDebug() << "[InstalledAsyncBase] Node status changed:" << m_nodeOnline << "->" << ready;
                     m_nodeOnline = ready;
                     onNodeStatusChanged(ready);
+                    
+                    // Only trigger status update if node comes online
+                    if (ready) {
+                        QTimer::singleShot(2000, this, &InstalledAsyncBase::performCachedStatusUpdate);
+                    }
                 }
                 
                 m_nodeCheckInProgress = false;
@@ -205,22 +259,343 @@ void InstalledAsyncBase<TI,TD>::initializeMonitoring()
             });
         });
         
-        nodeTimer->start(25000); // Increased to 25 seconds to reduce load
+        nodeTimer->start(30000); // Increased to 30 seconds
         
-        qDebug() << "[InstalledAsyncBase] Node monitoring enabled (15s interval, with caching)";
+        qDebug() << "[InstalledAsyncBase] Node monitoring enabled";
     }
 }
 
-/* ------------ cleanup monitoring ------------------------------ */
+/* ------------ Initialize file monitoring with MD5 ----------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::initializeFileMonitoring()
+{
+    const QString jf = folderRoot() + "installed"
+                    + QString(fileName()).remove("vehicle-") + "s.json";
+    m_watchedFilePath = jf;
+    
+    qDebug() << "[InstalledAsyncBase] Initializing optimized file monitoring:" << jf;
+    
+    // Calculate initial hash
+    m_lastFileHash = calculateFileHash(jf);
+    m_isBootup = m_lastFileHash.isEmpty();
+    
+    qDebug() << "[InstalledAsyncBase] Initial file hash:" 
+             << (m_lastFileHash.isEmpty() ? "NONE (bootup)" : m_lastFileHash);
+    
+    // Start hash checking timer
+    m_fileHashTimer->start();
+    
+    // Simplified legacy thread for compatibility
+    m_checkThread = new InstalledCheckThread(static_cast<TD*>(this), jf, this);
+    connect(m_checkThread, &InstalledCheckThread::resultReady,
+            static_cast<TD*>(this), &TD::handleResults,
+            Qt::QueuedConnection);
+    m_checkThread->start();
+}
+
+/* ------------ Initialize status caching system -------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::initializeStatusCaching()
+{
+    qDebug() << "[InstalledAsyncBase] Initializing enhanced status caching system";
+    
+    // Initialize cache for current items
+    {
+        QMutexLocker locker(&m_cacheMutex);
+        m_deploymentStatusCache.clear();
+        for (const auto &item : m_items) {
+            m_deploymentStatusCache[item.id] = DeploymentStatus(item.id);
+        }
+    }
+    
+    // Perform initial status update after a short delay
+    QTimer::singleShot(3000, this, &InstalledAsyncBase::performCachedStatusUpdate);
+    
+    qDebug() << "[InstalledAsyncBase] Status caching initialized for" << m_items.size() << "items";
+}
+
+/* ------------ Calculate file hash ---------------------------- */
+template<class TI,class TD>
+QString InstalledAsyncBase<TI,TD>::calculateFileHash(const QString &filePath)
+{
+    QFile file(filePath);
+    if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
+        return QString();
+    }
+    
+    QCryptographicHash hash(QCryptographicHash::Md5);
+    hash.addData(file.readAll());
+    return QString(hash.result().toHex());
+}
+
+/* ------------ File hash change handler ---------------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::onFileHashChanged()
+{
+    QString currentHash = calculateFileHash(m_watchedFilePath);
+    
+    // Handle bootup case
+    if (m_isBootup) {
+        if (!currentHash.isEmpty()) {
+            m_lastFileHash = currentHash;
+            m_isBootup = false;
+            qDebug() << "[InstalledAsyncBase] Bootup: File detected, hash:" << currentHash;
+            
+            // Trigger reload from database
+            QTimer::singleShot(1000, this, [this]() {
+                initInstalledFromDB();
+            });
+        }
+        return;
+    }
+    
+    // Check for changes during runtime
+    if (currentHash != m_lastFileHash) {
+        qDebug() << "[InstalledAsyncBase] File hash changed - triggering reload";
+        
+        m_lastFileHash = currentHash;
+        
+        // Invalidate current cache
+        invalidateStatusCache();
+        
+        // Trigger reload from database (debounced)
+        QTimer::singleShot(500, this, [this]() {
+            auto *job = new Async::Job<QJsonArray>([=]() -> QJsonArray {
+                QThread::msleep(200); // Ensure file is fully written
+                DataManager dm; 
+                return dm.load(dbKey());
+            }, this);
+            
+            connect(job, &Async::JobBase::finished, this, [this, job](bool) {
+                updateInstalledList(job->result());
+                
+                // Reinitialize status caching for new items
+                initializeStatusCaching();
+                
+                job->deleteLater();
+            });
+        });
+    }
+}
+
+/* ------------ Manual status refresh -------------------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::refreshServiceStatus()
+{
+    qDebug() << "[InstalledAsyncBase] Manual status refresh requested";
+    invalidateStatusCache();
+    performCachedStatusUpdate();
+}
+
+/* ------------ Trigger status update if needed --------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::triggerStatusUpdateIfNeeded()
+{
+    // Only update if we don't have recent valid cache
+    bool needsUpdate = false;
+    {
+        QMutexLocker locker(&m_cacheMutex);
+        for (const auto &item : m_items) {
+            if (!m_deploymentStatusCache.contains(item.id) || 
+                !m_deploymentStatusCache[item.id].isCacheValid(30000)) { // 30 sec threshold
+                needsUpdate = true;
+                break;
+            }
+        }
+    }
+    
+    if (needsUpdate) {
+        performCachedStatusUpdate();
+    }
+}
+
+/* ------------ Enhanced cached status update ------------------ */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::performCachedStatusUpdate()
+{
+    if (m_statusUpdateInProgress) {
+        qDebug() << "[InstalledAsyncBase] Status update already in progress, skipping";
+        return;
+    }
+    
+    if (m_items.isEmpty()) {
+        qDebug() << "[InstalledAsyncBase] No items to update status for";
+        return;
+    }
+    
+    if (!m_autoStatusUpdatesEnabled) {
+        qDebug() << "[InstalledAsyncBase] Auto status updates disabled";
+        return;
+    }
+    
+    // Check if we have valid cached data first
+    bool hasValidCache = false;
+    {
+        QMutexLocker locker(&m_cacheMutex);
+        for (const auto &item : m_items) {
+            if (m_deploymentStatusCache.contains(item.id) && 
+                m_deploymentStatusCache[item.id].isCacheValid(CACHE_VALIDITY_DURATION)) {
+                hasValidCache = true;
+                break;
+            }
+        }
+    }
+    
+    if (hasValidCache) {
+        // Use cached data if available and valid
+        applyStatusUpdatesToUI();
+        return;
+    }
+    
+    qDebug() << "[InstalledAsyncBase] Performing cached status update for" << m_items.size() << "items";
+    m_statusUpdateInProgress = true;
+    
+    // Perform status updates in background thread
+    auto *job = new Async::Job<void>([this]() {
+        this->updateDeploymentStatusCache();
+        return true;
+    }, this);
+    
+    connect(job, &Async::JobBase::finished, this, [this, job](bool) {
+        // Apply updates to UI in main thread
+        applyStatusUpdatesToUI();
+        m_statusUpdateInProgress = false;
+        job->deleteLater();
+        
+        qDebug() << "[InstalledAsyncBase] Status update completed";
+
+        NOTIFY_SUCCESS("Service Status", "Service status updated successfully for Vehhicle Apps/Services");
+    });
+}
+
+/* ------------ Update deployment status cache ----------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::updateDeploymentStatusCache()
+{
+    QMutexLocker locker(&m_cacheMutex);
+    QDateTime now = QDateTime::currentDateTime();
+    
+    for (const auto &item : m_items) {
+        if (!m_deploymentStatusCache.contains(item.id)) {
+            m_deploymentStatusCache[item.id] = DeploymentStatus(item.id);
+        }
+        
+        DeploymentStatus &status = m_deploymentStatusCache[item.id];
+        
+        // Skip if cache is still valid
+        if (status.isCacheValid(CACHE_VALIDITY_DURATION)) {
+            continue;
+        }
+        
+        // Skip if we've had too many consecutive failures
+        if (status.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            // Only retry every 60 seconds for failed deployments
+            if (status.lastChecked.isValid() && 
+                status.lastChecked.msecsTo(now) < 60000) {
+                continue;
+            }
+        }
+        
+        // Check deployment status
+        bool isRunning = false;
+        bool checkSuccessful = false;
+        
+        try {
+            auto *job = m_jobManager->checkDeploymentAvailable(item.id, 5);
+            QEventLoop loop;
+            
+            connect(job, &Async::JobBase::finished, &loop, [&](bool) {
+                isRunning = job->result();
+                checkSuccessful = true;
+                loop.quit();
+            });
+            
+            loop.exec();
+            job->deleteLater();
+            
+            // Update cache
+            bool statusChanged = (status.isRunning != isRunning);
+            if (statusChanged) {
+                status.lastStatusChange = now;
+                qDebug() << "[InstalledAsyncBase] Status changed for" << item.id 
+                         << ":" << status.isRunning << "->" << isRunning;
+            }
+            
+            status.isRunning = isRunning;
+            status.lastChecked = now;
+            status.hasValidCache = true;
+            
+            if (checkSuccessful) {
+                status.consecutiveFailures = 0;
+            }
+            
+        } catch (const std::exception &e) {
+            qWarning() << "[InstalledAsyncBase] Exception checking status for" 
+                       << item.id << ":" << e.what();
+            status.consecutiveFailures++;
+            status.lastChecked = now;
+            status.hasValidCache = false;
+        }
+        
+        // Small delay between checks to prevent system overload
+        QThread::msleep(150);
+    }
+}
+
+/* ------------ Apply status updates to UI -------------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::applyStatusUpdatesToUI()
+{
+    QMutexLocker locker(&m_cacheMutex);
+    
+    int updatedCount = 0;
+    for (int i = 0; i < m_items.size(); ++i) {
+        const auto &item = m_items[i];
+        
+        if (m_deploymentStatusCache.contains(item.id)) {
+            const DeploymentStatus &status = m_deploymentStatusCache[item.id];
+            
+            // Only update UI if we have valid cache data
+            if (status.hasValidCache) {
+                static_cast<TD*>(this)->updateServicesRunningSts(
+                    item.id, status.isRunning, i);
+                updatedCount++;
+            }
+        }
+    }
+    
+    if (updatedCount > 0) {
+        qDebug() << "[InstalledAsyncBase] Applied status updates to UI for" 
+                 << updatedCount << "items";
+    }
+}
+
+/* ------------ Invalidate status cache ------------------------ */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::invalidateStatusCache()
+{
+    QMutexLocker locker(&m_cacheMutex);
+    for (auto &status : m_deploymentStatusCache) {
+        status.hasValidCache = false;
+        status.lastChecked = QDateTime();
+    }
+    qDebug() << "[InstalledAsyncBase] Status cache invalidated";
+}
+
+/* ------------ cleanup monitoring ----------------------------- */
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::cleanupMonitoring()
 {
+    if (m_fileHashTimer) {
+        m_fileHashTimer->stop();
+    }
+    
     if (m_wlanMonitor) {
         m_wlanMonitor->stopMonitoring();
     }
 }
 
-/* ------------ status accessors -------------------------------- */
+/* ------------ status accessors ------------------------------- */
 template<class TI,class TD>
 bool InstalledAsyncBase<TI,TD>::workerNodeOnline() const
 {
@@ -233,17 +608,19 @@ bool InstalledAsyncBase<TI,TD>::wlanConnected() const
     return m_wlanOnline;
 }
 
-/* ------------ DB reload --------------------------------------- */
+/* ------------ DB reload -------------------------------------- */
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::initInstalledFromDB()
 {
     emit static_cast<TD*>(this)->clearServicesListView();
     m_items.clear();
+    invalidateStatusCache();
+    
     DataManager dm;
     updateInstalledList(dm.load(dbKey()));
 }
 
-/* ------------ rebuild model & notify QML --------------------- */
+/* ------------ rebuild model & notify QML -------------------- */
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::updateInstalledList(const QJsonArray &arr)
 {
@@ -271,27 +648,15 @@ void InstalledAsyncBase<TI,TD>::updateInstalledList(const QJsonArray &arr)
     static_cast<TD*>(this)->appendLastRowToServicesList(m_items.size());
 }
 
-/* ------------ QFileSystemWatcher slot (debounce) -------------- */
+/* ------------ Legacy file watcher slot (minimal) ------------ */
 template<class TI,class TD>
-void InstalledAsyncBase<TI,TD>::fileChanged(const QString&)
+void InstalledAsyncBase<TI,TD>::fileChanged(const QString& filePath)
 {
-    // Create job in main thread to avoid parenting issues
-    QMetaObject::invokeMethod(this, [this]() {
-        auto *job = new Async::Job<QJsonArray>([=]() -> QJsonArray {
-            QThread::msleep(300);
-            DataManager dm; 
-            qDebug() << "[InstalledAsyncBase] fileChanged, reloading from DB: " << dbKey();
-            return dm.load(dbKey());
-        }, this); // Safe to set parent here since we're in main thread
-        
-        connect(job, &Async::JobBase::finished, this, [this, job](bool) {
-            updateInstalledList(job->result());
-            job->deleteLater();
-        });
-    }, Qt::QueuedConnection);
+    // Minimal legacy compatibility - MD5 system handles the real work
+    Q_UNUSED(filePath)
 }
 
-/* shared editor launcher */
+/* ------------ shared editor launcher ------------------------- */
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::launchVsCode(int idx)
 {
@@ -305,12 +670,14 @@ void InstalledAsyncBase<TI,TD>::launchVsCode(int idx)
     std::system(cmd.toUtf8().constData());
 }
 
-/* ------------ (un)deploy -------------------------------------- */
+/* ------------ Enhanced (un)deploy ---------------------------- */
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::executeServices(
         int idx, const QString&, const QString id, bool subscribe)
 {
     if (idx < 0 || idx >= m_items.size()) return;
+
+    qDebug() << "[InstalledAsyncBase] executeServices called for" << id << "subscribe:" << subscribe;
 
     // Prepare deployment info
     K3s::JobManager::DeploymentInfo deployInfo;
@@ -328,17 +695,46 @@ void InstalledAsyncBase<TI,TD>::executeServices(
         if (result.success) {
             // Update local model
             m_items[idx].isSubscribed = subscribe;
+            
+            // Update status cache immediately
+            {
+                QMutexLocker locker(&m_cacheMutex);
+                if (m_deploymentStatusCache.contains(id)) {
+                    m_deploymentStatusCache[id].isRunning = subscribe;
+                    m_deploymentStatusCache[id].lastChecked = QDateTime::currentDateTime();
+                    m_deploymentStatusCache[id].lastStatusChange = QDateTime::currentDateTime();
+                    m_deploymentStatusCache[id].consecutiveFailures = 0;
+                    m_deploymentStatusCache[id].hasValidCache = true;
+                } else {
+                    DeploymentStatus newStatus(id);
+                    newStatus.isRunning = subscribe;
+                    newStatus.lastChecked = QDateTime::currentDateTime();
+                    newStatus.lastStatusChange = QDateTime::currentDateTime();
+                    newStatus.hasValidCache = true;
+                    m_deploymentStatusCache[id] = newStatus;
+                }
+            }
+            
+            // Apply immediate UI update
+            static_cast<TD*>(this)->updateServicesRunningSts(id, subscribe, idx);
+            
             m_checkThread->triggerCheckAppStart(id, m_items[idx].name);
             m_checkThread->notifyState(true);
+            
+            // Schedule a verification status update after deployment settles
+            QTimer::singleShot(5000, this, &InstalledAsyncBase::performCachedStatusUpdate);
+            
+            qDebug() << "[InstalledAsyncBase] Service" << id << "deployment successful, status cached";
         } else {
             m_checkThread->notifyState(false);
+            qWarning() << "[InstalledAsyncBase] Service deployment failed:" << result.errorMessage;
         }
         
         job->deleteLater();
     });
 }
 
-/* ------------ remove ------------------------------------------ */
+/* ------------ remove ----------------------------------------- */
 template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::removeServices(int idx)
 {
@@ -346,6 +742,14 @@ void InstalledAsyncBase<TI,TD>::removeServices(int idx)
 
     const QString id   = m_items[idx].id;
     const QString yaml = deploymentYaml(id);
+
+    qDebug() << "[InstalledAsyncBase] Removing service:" << id;
+
+    // Remove from status cache immediately
+    {
+        QMutexLocker locker(&m_cacheMutex);
+        m_deploymentStatusCache.remove(id);
+    }
 
     // Create chain without parent to avoid cross-thread issues
     auto *chain = new Async::Chain(this);
@@ -414,7 +818,7 @@ void InstalledAsyncBase<TI,TD>::removeServices(int idx)
     });
 
     connect(chain,&Async::Chain::finished,
-            chain,&QObject::deleteLater);         // cleanup
+            chain,&QObject::deleteLater);
     chain->start();
 }
 
@@ -455,8 +859,12 @@ void InstalledAsyncBase<TI,TD>::onNodeStatusChanged(bool online)
 {
     if (online) {
         NOTIFY_SUCCESS("Node","VIP (Vehicle Integration Platform) ~ ONLINE");
+        // Only trigger status update when node comes online (not when it goes offline)
+        QTimer::singleShot(3000, this, &InstalledAsyncBase::performCachedStatusUpdate);
     } else {
         NOTIFY_WARNING("Node","VIP (Vehicle Integration Platform) ~ OFFLINE");
+        // Invalidate cache when node goes offline
+        invalidateStatusCache();
     }
     static_cast<TD*>(this)->workerNodeStatusChanged(online);
 }
@@ -467,14 +875,17 @@ void InstalledAsyncBase<TI,TD>::onWlanStatusChanged(bool connected)
     bool wasConnected = m_wlanOnline;
     m_wlanOnline = connected;
     
-    // Only notify if status actually changed
+    // Only act if status actually changed
     if (wasConnected != connected) {
         if (connected) {
-            // NOTIFY_SUCCESS("Internet", "Connection restored - auto-restart may begin");
-            // qDebug() << "[InstalledAsyncBase] Internet connection restored";
+            // NOTIFY_SUCCESS("Internet", "Connection restored - updating service status");
+            // Trigger immediate status update when connection restored
+            QTimer::singleShot(2000, this, &InstalledAsyncBase::performCachedStatusUpdate);
         } else {
             NOTIFY_WARNING("Internet", "Connection lost - services may be affected");
-            qDebug() << "[InstalledAsyncBase] Internet connection lost";
+            // Invalidate cache when internet is lost
+            invalidateStatusCache();
+            qDebug() << "[InstalledAsyncBase] Internet connection lost, cache invalidated";
         }
     }
 }
@@ -484,46 +895,9 @@ void InstalledAsyncBase<TI,TD>::onJobFinished(const QString &operation, bool suc
 {
     qDebug() << "[InstalledAsyncBase] Job finished:" << operation 
              << "Success:" << success << "Message:" << message;
-    // Additional handling can be added here if needed
-}
-
-/* ------------ deployment monitor ------------------------------ */
-template<class TI,class TD>
-void InstalledAsyncBase<TI,TD>::checkRunningAppSts()
-{
-    if(m_items.isEmpty()) return;
     
-    auto *chain = new Async::Chain(this);
-
-    chain->add([this](){
-        m_last.clear();
-        for(int i = 0; i < m_items.size(); ++i) {
-            auto *job = m_jobManager->checkDeploymentAvailable(m_items[i].id, 5);
-            QEventLoop loop;
-            bool available = false;
-            
-            connect(job, &Async::JobBase::finished, &loop, [&](bool) {
-                available = job->result();
-                loop.quit();
-            });
-            
-            loop.exec();
-            job->deleteLater();
-            
-            m_last.push_back({m_items[i].id, available, i});
-        }
-        return true;
-    });
-
-    chain->add([this](){
-        QMetaObject::invokeMethod(qApp,[this](){
-            for(auto &s:m_last)
-                static_cast<TD*>(this)
-                    ->updateServicesRunningSts(s.id,s.ok,s.idx);
-        },Qt::QueuedConnection);
-        return true;
-    });
-
-    connect(chain, &Async::Chain::finished, chain, &QObject::deleteLater);
-    chain->start();
+    // Optionally trigger status update for certain operations
+    if (success && (operation.contains("deploy") || operation.contains("remove"))) {
+        QTimer::singleShot(2000, this, &InstalledAsyncBase::performCachedStatusUpdate);
+    }
 }

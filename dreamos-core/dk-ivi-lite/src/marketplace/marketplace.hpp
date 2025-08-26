@@ -4,6 +4,9 @@
 #include <QProcess>
 #include <QStandardPaths>
 #include <QDir>
+#include <QEventLoop>
+#include <QDateTime>
+#include <QTimer>
 
 // bring in your existing fetch helpers:
 #include "../utils/async/asyncjob.hpp"
@@ -62,6 +65,42 @@ class CategoryListModel : public QAbstractListModel {
     QList<Info> m_list;
 };
 
+//-----------------------------------------------------------------------------
+// FIXED: InstallationWorker - Simplified, no threading complexity
+//-----------------------------------------------------------------------------
+class InstallationWorker : public QObject {
+    Q_OBJECT
+
+public:
+    explicit InstallationWorker(QObject *parent = nullptr);
+    ~InstallationWorker();
+
+    void startInstallation(const AppInfo &app, const QString &category);
+    void cancelInstallation();
+
+signals:
+    void installationProgress(const QString &message);
+    void installationCompleted(const QString &appId);
+    void installationFailed(const QString &appId, const QString &error);
+
+private:
+    // Synchronous method that runs in background job
+    bool performInstallationSync();
+    
+    // Helper methods
+    bool prepareManifest(const AppInfo &app, K3s::ManifestInfo &manifest);
+    QStringList buildInstallationCommands(const AppInfo &app, const K3s::ManifestInfo &manifest);
+    bool executeCommandsDirectly(const QStringList &commands);
+    void updateInstallationRecord(const AppInfo &app, const QString &category);
+    void cleanupInstallationJobs(const QString &appId);
+    bool checkNodeReadyQuick(const QString &nodeName);
+
+    K3s::JobManager *m_jobManager;
+    bool m_installationActive;
+    AppInfo m_currentApp;
+    QString m_currentCategory;
+};
+
 class MarketplaceViewModel : public QObject {
     Q_OBJECT
 
@@ -99,6 +138,7 @@ class MarketplaceViewModel : public QObject {
     void installingIndexChanged(int newIndex);
     void installPendingChanged(bool);
     void pendingAppNameChanged(const QString&);
+    void installProgressChanged(const QString &message);  // Progress updates
     // 
     void searchFinished();
     void searchError();
@@ -106,26 +146,19 @@ class MarketplaceViewModel : public QObject {
     void installError();
 
   private slots:
-    void onInstallJobFinished(bool success);
-    void onCleanupJobFinished(bool success);
+    void onInstallationProgress(const QString &message);
+    void onInstallationCompleted(const QString &appId);
+    void onInstallationFailed(const QString &appId, const QString &error);
 
   private:
-    bool confirmInstallPre(int idx);
-    bool confirmInstallPost(int idx);
-
     AppListModel*      m_apps         = nullptr;
     CategoryListModel* m_cats         = nullptr;
     QList<AppInfo>     m_lastApps;
 
     Async::Job<QList<AppInfo>>     *m_searchJob  = nullptr;
-    Async::Chain                   *m_installChain = nullptr;
-    Async::Chain                   *m_cleanupChain = nullptr;
 
-    // Extracted K3s functionality
-    K3s::JobManager      *m_jobManager = nullptr;
-    K3s::ManifestInfo    m_lastManifest;
-
-    bool               m_lastInstallationSuccess = false;
+    // Simplified: Just use the worker, no complex job manager chains
+    InstallationWorker             *m_installWorker = nullptr;
 
     int     m_currentCategory = 0;
     bool    m_isInstalling    = false;
