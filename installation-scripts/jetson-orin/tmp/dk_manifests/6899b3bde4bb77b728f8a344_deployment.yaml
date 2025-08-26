@@ -44,17 +44,28 @@ spec:
             memory: "128Mi"
             cpu: "100m"
           limits:
-            memory: "512Mi"
-            cpu: "500m"
+            memory: "256Mi"
+            cpu: "300m"
         
         env:
-        - name: DISPLAY
-          value: ":0"
-        
-        args: []
+            - name: DISPLAY
+              value: ":0"
+
         
         securityContext:
-          privileged: true
+          privileged: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: false
+          allowPrivilegeEscalation: false
         
-        tty: true
-        stdin: true
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: var-tmp
+          mountPath: /var/tmp
+      
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: var-tmp
+        emptyDir: {}
