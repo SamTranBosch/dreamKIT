@@ -206,10 +206,10 @@ void AutoRestartManager::forceRestartBoth()
     });
     
     // Step 2: Restart application (commented out as per original)
-    // chain->add([this]() -> bool {
-    //     this->restartApplication();
-    //     return true;
-    // });
+    chain->add([this]() -> bool {
+        this->restartApplication();
+        return true;
+    });
     
     connect(chain, &Async::Chain::finished, this, [this](bool success) {
         const QString message = success 

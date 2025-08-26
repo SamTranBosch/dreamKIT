@@ -1,12 +1,9 @@
 #pragma once
 #include <QObject>
 #include <QAbstractListModel>
-#include <QProcess>
 #include <QStandardPaths>
 #include <QDir>
-#include <QEventLoop>
 #include <QDateTime>
-#include <QTimer>
 
 // bring in your existing fetch helpers:
 #include "../utils/async/asyncjob.hpp"
@@ -66,7 +63,7 @@ class CategoryListModel : public QAbstractListModel {
 };
 
 //-----------------------------------------------------------------------------
-// FIXED: InstallationWorker - Simplified, no threading complexity
+// Simplified InstallationWorker using JobManager
 //-----------------------------------------------------------------------------
 class InstallationWorker : public QObject {
     Q_OBJECT
@@ -84,19 +81,10 @@ signals:
     void installationFailed(const QString &appId, const QString &error);
 
 private:
-    // Synchronous method that runs in background job
-    bool performInstallationSync();
-    
-    // Helper methods
-    bool prepareManifest(const AppInfo &app, K3s::ManifestInfo &manifest);
     QStringList buildInstallationCommands(const AppInfo &app, const K3s::ManifestInfo &manifest);
-    bool executeCommandsDirectly(const QStringList &commands);
     void updateInstallationRecord(const AppInfo &app, const QString &category);
-    void cleanupInstallationJobs(const QString &appId);
-    bool checkNodeReadyQuick(const QString &nodeName);
 
     K3s::JobManager *m_jobManager;
-    bool m_installationActive;
     AppInfo m_currentApp;
     QString m_currentCategory;
 };
@@ -149,16 +137,20 @@ class MarketplaceViewModel : public QObject {
     void onInstallationProgress(const QString &message);
     void onInstallationCompleted(const QString &appId);
     void onInstallationFailed(const QString &appId, const QString &error);
+    void onJobManagerBusy(const QString &reason);
 
   private:
+    void resetInstallationState();
+    
     AppListModel*      m_apps         = nullptr;
     CategoryListModel* m_cats         = nullptr;
     QList<AppInfo>     m_lastApps;
 
     Async::Job<QList<AppInfo>>     *m_searchJob  = nullptr;
 
-    // Simplified: Just use the worker, no complex job manager chains
+    // Simplified: Just use the worker with JobManager integration
     InstallationWorker             *m_installWorker = nullptr;
+    K3s::JobManager               *m_jobManager = nullptr;
 
     int     m_currentCategory = 0;
     bool    m_isInstalling    = false;

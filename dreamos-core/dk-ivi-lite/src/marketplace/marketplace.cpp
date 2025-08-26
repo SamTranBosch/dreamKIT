@@ -1,14 +1,4 @@
-#include <QFile>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QJsonObject>
-#include <QStandardPaths>
-#include <QDir>
-#include <QProcess>
-#include <QHostInfo>
-#include <QProcessEnvironment>
-#include <QTimer>
-
+// marketplace.cpp - Simplified version using JobManager
 #include "marketplace.hpp"
 #include "../utils/notifications/notificationmanager.hpp"
 
@@ -22,7 +12,7 @@ extern QString DK_DOCKER_HUB_NAMESPACE;
 extern QString DK_CONTAINER_ROOT;
 
 //-----------------------------------------------------------------------------
-// AppListModel implementation (unchanged)
+// AppListModel implementation (unchanged - keeping existing code)
 //-----------------------------------------------------------------------------
 AppListModel::AppListModel(QObject* p)
   : QAbstractListModel(p)
@@ -153,251 +143,134 @@ void CategoryListModel::loadFromJsonFile(const QString &filePath) {
 }
 
 //-----------------------------------------------------------------------------
-// InstallationWorker - FIXED VERSION (No threading complexity)
+// Simplified InstallationWorker using JobManager
 //-----------------------------------------------------------------------------
 InstallationWorker::InstallationWorker(QObject *parent)
     : QObject(parent)
-    , m_installationActive(false)
+    , m_jobManager(JobManager::instance())
 {
-    // Create job manager in same thread for simplicity
-    m_jobManager = new K3s::JobManager(this);
-    qDebug() << "[InstallationWorker] Created with JobManager";
+    qDebug() << "[InstallationWorker] Using centralized JobManager";
 }
 
 InstallationWorker::~InstallationWorker()
 {
-    // JobManager will be cleaned up by parent
+    // JobManager is singleton, no cleanup needed
 }
 
 void InstallationWorker::startInstallation(const AppInfo &app, const QString &category)
 {
-    if (m_installationActive) {
-        qWarning() << "[InstallationWorker] Installation already active, ignoring request";
-        return;
-    }
-    
     qDebug() << "[InstallationWorker] Starting installation for:" << app.name;
     
     // Store installation info
     m_currentApp = app;
     m_currentCategory = category;
-    m_installationActive = true;
     
-    // Start installation using async job (non-blocking)
-    auto *installJob = new Job<bool>([this]() -> bool {
-        return this->performInstallationSync();
-    }, this);
+    emit installationProgress("Preparing installation...");
     
-    connect(installJob, &JobBase::finished, this, [this, installJob](bool success) {
-        m_installationActive = false;
+    // Create installation request
+    JobManager::InstallationRequest request;
+    request.appId = app.id;
+    request.appName = app.name;
+    request.category = category;
+    
+    try {
+        // Prepare manifest
+        emit installationProgress("Creating deployment manifest...");
+        K3s::ManifestInfo manifest = K3s::ManifestBuilder::write(app);
         
-        if (success) {
-            bool result = installJob->result();
-            if (result) {
-                qDebug() << "[InstallationWorker] Installation completed successfully";
-                emit installationCompleted(m_currentApp.id);
-            } else {
-                qDebug() << "[InstallationWorker] Installation failed";
-                emit installationFailed(m_currentApp.id, "Installation process failed");
-            }
-        } else {
-            qDebug() << "[InstallationWorker] Installation job failed";
-            emit installationFailed(m_currentApp.id, "Installation job execution failed");
+        // Build installation commands
+        request.commands = buildInstallationCommands(app, manifest);
+        
+        if (request.commands.isEmpty()) {
+            emit installationFailed(app.id, "No installation commands generated");
+            return;
         }
         
-        installJob->deleteLater();
-    });
-    
-    emit installationProgress("Installation started...");
+        // Submit to JobManager
+        auto *job = m_jobManager->installApplication(request);
+        
+        connect(job, &Async::JobBase::finished, this, [=](bool jobSuccess) {
+            // jobSuccess indicates if the async job completed without crashing
+            // We also need to check the actual result
+            if (jobSuccess) {
+                JobManager::JobResult result = job->result();
+                if (result.success) {
+                    qDebug() << "[InstallationWorker] Installation completed successfully for" << m_currentApp.id;
+                    this->updateInstallationRecord(m_currentApp, m_currentCategory);
+                    emit installationCompleted(m_currentApp.id);
+                } else {
+                    qWarning() << "[InstallationWorker] Installation failed:" << result.errorMessage;
+                    qWarning() << "[InstallationWorker] Command output:" << result.output;
+                    emit installationFailed(m_currentApp.id, result.errorMessage);
+                }
+            } else {
+                qCritical() << "[InstallationWorker] Installation job crashed or failed to execute";
+                emit installationFailed(m_currentApp.id, "Installation job execution failed");
+            }
+            job->deleteLater();
+        });
+        
+    } catch (const std::exception &e) {
+        emit installationFailed(app.id, QString("Exception: %1").arg(e.what()));
+    }
 }
 
 void InstallationWorker::cancelInstallation()
 {
-    if (!m_installationActive) return;
-    
-    qDebug() << "[InstallationWorker] Cancelling installation";
-    m_installationActive = false;
+    // JobManager doesn't support cancellation yet, but we can emit failure
     emit installationFailed(m_currentApp.id, "Installation cancelled by user");
-}
-
-bool InstallationWorker::performInstallationSync()
-{
-    try {
-        qDebug() << "[InstallationWorker] performInstallationSync started";
-        
-        // Step 1: Prepare manifest
-        emit installationProgress("Preparing installation manifest...");
-        K3s::ManifestInfo manifest;
-        if (!prepareManifest(m_currentApp, manifest)) {
-            emit installationProgress("Failed to create manifest");
-            return false;
-        }
-        
-        qDebug() << "[InstallationWorker] Manifest prepared successfully";
-        
-        // Step 2: Check node readiness if required (simplified)
-        if (manifest.isRemoteNode) {
-            emit installationProgress("Checking remote node...");
-            // Use a simple timeout-based approach
-            QTimer timer;
-            timer.setSingleShot(true);
-            QEventLoop loop;
-            
-            auto *nodeJob = m_jobManager->checkNodeReady("vip", 3);
-            bool nodeReady = false;
-            
-            connect(nodeJob, &JobBase::finished, &loop, [&](bool success) {
-                if (success) {
-                    nodeReady = nodeJob->result();
-                }
-                loop.quit();
-            });
-            
-            connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
-            timer.start(5000); // 5 second timeout
-            
-            loop.exec();
-            nodeJob->deleteLater();
-            
-            if (!nodeReady) {
-                emit installationProgress("Remote node not ready");
-                return false;
-            }
-            emit installationProgress("Remote node is ready");
-        }
-        
-        // Step 3: Execute installation commands (simplified)
-        emit installationProgress("Executing installation commands...");
-        QStringList commands = buildInstallationCommands(m_currentApp, manifest);
-        
-        if (commands.isEmpty()) {
-            emit installationProgress("No installation commands to execute");
-            return false;
-        }
-        
-        qDebug() << "[InstallationWorker] Executing commands:" << commands;
-        
-        // Use a simpler approach - execute commands directly
-        bool commandsSuccess = executeCommandsDirectly(commands);
-        
-        if (!commandsSuccess) {
-            emit installationProgress("Installation commands failed");
-            return false;
-        }
-        
-        emit installationProgress("Installation commands completed");
-        
-        // Step 4: Update tracking data
-        emit installationProgress("Updating installation records...");
-        updateInstallationRecord(m_currentApp, m_currentCategory);
-        
-        // Step 5: Simple cleanup
-        emit installationProgress("Cleaning up...");
-        cleanupInstallationJobs(m_currentApp.id);
-        
-        emit installationProgress("Installation completed successfully");
-        qDebug() << "[InstallationWorker] performInstallationSync completed successfully";
-        return true;
-        
-    } catch (const std::exception &e) {
-        qWarning() << "[InstallationWorker] Exception in performInstallationSync:" << e.what();
-        emit installationProgress(QString("Exception: %1").arg(e.what()));
-        return false;
-    }
-}
-
-bool InstallationWorker::prepareManifest(const AppInfo &app, K3s::ManifestInfo &manifest)
-{
-    try {
-        qDebug() << "[InstallationWorker] Preparing manifest for:" << app.id;
-        manifest = K3s::ManifestBuilder::write(app);
-        return true;
-    } catch (const std::exception &e) {
-        qWarning() << "[InstallationWorker] Manifest preparation failed:" << e.what();
-        return false;
-    }
 }
 
 QStringList InstallationWorker::buildInstallationCommands(const AppInfo &app, const K3s::ManifestInfo &manifest)
 {
     QStringList commands;
     
+    qDebug() << "[InstallationWorker] Building installation commands for" << app.id;
+    qDebug() << "[InstallationWorker] Manifest - isRemoteNode:" << manifest.isRemoteNode;
+    qDebug() << "[InstallationWorker] Manifest - pullJobYaml:" << manifest.pullJobYaml;
+    qDebug() << "[InstallationWorker] Manifest - mirrorJobYaml:" << manifest.mirrorJobYaml;
+    
+    // Node readiness check (lightweight)
+    if (manifest.isRemoteNode) {
+        emit installationProgress("Checking remote node availability...");
+        commands << QString("kubectl get node vip --no-headers || (echo 'Node vip not ready' && exit 1)");
+    }
+    
+    // Mirror job (if remote node)
     if (manifest.isRemoteNode && !manifest.mirrorJobYaml.isEmpty()) {
+        emit installationProgress("Setting up image mirroring...");
         commands << QString("kubectl apply -f %1").arg(manifest.mirrorJobYaml);
         commands << QString("kubectl wait --for=condition=complete job/mirror-%1 --timeout=300s").arg(app.id);
     }
     
+    // Pull job
     if (!manifest.pullJobYaml.isEmpty()) {
+        emit installationProgress("Pulling container image...");
         commands << QString("kubectl apply -f %1").arg(manifest.pullJobYaml);
         commands << QString("kubectl wait --for=condition=complete job/pull-%1 --timeout=600s").arg(app.id);
     }
     
-    qDebug() << "[InstallationWorker] Built commands:" << commands;
-    return commands;
-}
-
-bool InstallationWorker::executeCommandsDirectly(const QStringList &commands)
-{
-    bool allSuccess = true;
-    
-    for (int i = 0; i < commands.size(); ++i) {
-        const QString &cmd = commands[i];
-        qDebug() << "[InstallationWorker] Executing command" << (i+1) << "of" << commands.size() << ":" << cmd;
-        
-        QProcess process;
-        process.setProcessChannelMode(QProcess::MergedChannels);
-        process.start("/bin/bash", QStringList() << "-c" << cmd);
-        
-        if (!process.waitForStarted(3000)) {
-            qWarning() << "[InstallationWorker] Failed to start command:" << cmd;
-            allSuccess = false;
-            break;  // Stop on critical failure
-        }
-        
-        // Set timeout based on command type
-        int timeout = 30000;  // default 30 seconds
-        if (cmd.contains("kubectl wait")) {
-            timeout = 120000;  // 2 minutes for wait commands
-        }
-        
-        if (!process.waitForFinished(timeout)) {
-            qWarning() << "[InstallationWorker] Command timed out after" << timeout << "ms:" << cmd;
-            process.kill();
-            process.waitForFinished(2000);  // Give it time to cleanup
-            allSuccess = false;
-            break;  // Stop on timeout
-        }
-        
-        QString output = process.readAll().trimmed();
-        int exitCode = process.exitCode();
-        
-        if (exitCode != 0) {
-            qWarning() << "[InstallationWorker] Command failed with exit code" << exitCode << ":" << cmd;
-            qWarning() << "[InstallationWorker] Command output:" << output;
-            allSuccess = false;
-            break;  // Stop on command failure
-        }
-        
-        qDebug() << "[InstallationWorker] Command" << (i+1) << "completed successfully";
-        
-        // Brief pause between commands to avoid overwhelming the system
-        if (i < commands.size() - 1) {
-            QThread::msleep(500);  // 500ms pause
-        }
+    // Cleanup jobs after successful pull
+    if (!commands.isEmpty()) {
+        emit installationProgress("Cleaning up installation jobs...");
+        commands << QString("kubectl delete job mirror-%1 pull-%1 --ignore-not-found").arg(app.id);
     }
     
-    qDebug() << "[InstallationWorker] Command execution result:" << (allSuccess ? "SUCCESS" : "FAILED");
-    return allSuccess;
+    qDebug() << "[InstallationWorker] Generated" << commands.size() << "installation commands:";
+    for (int i = 0; i < commands.size(); ++i) {
+        qDebug() << "[InstallationWorker] Command" << (i+1) << ":" << commands[i];
+    }
+    
+    return commands;
 }
 
 void InstallationWorker::updateInstallationRecord(const AppInfo &app, const QString &category)
 {
     try {
-        qDebug() << "[InstallationWorker] Updating installation record for:" << app.id;
-        
         DataManager dm;
         QJsonArray arr = dm.load(category);
         
+        // Check if already exists
         bool exists = false;
         for (auto v : arr) {
             if (v.isObject() && v.toObject().value("id").toString() == app.id) {
@@ -416,96 +289,23 @@ void InstallationWorker::updateInstallationRecord(const AppInfo &app, const QStr
             rec["installedAt"] = QDateTime::currentDateTime().toString(Qt::ISODate);
             arr.append(rec);
             dm.save(category, arr);
-            qDebug() << "[InstallationWorker] Installation record updated";
-        } else {
-            qDebug() << "[InstallationWorker] Installation record already exists";
+            qDebug() << "[InstallationWorker] Installation record updated for:" << app.id;
         }
+        
     } catch (const std::exception &e) {
         qWarning() << "[InstallationWorker] Failed to update installation record:" << e.what();
-        // Don't fail the installation for this
-    }
-}
-
-void InstallationWorker::cleanupInstallationJobs(const QString &appId)
-{
-    try {
-        qDebug() << "[InstallationWorker] Starting cleanup for:" << appId;
-        
-        QStringList cleanupCmds;
-        cleanupCmds << QString("kubectl delete job mirror-%1 --ignore-not-found --timeout=10s").arg(appId);
-        cleanupCmds << QString("kubectl delete job pull-%1 --ignore-not-found --timeout=10s").arg(appId);
-        
-        for (const QString &cmd : cleanupCmds) {
-            qDebug() << "[InstallationWorker] Cleanup command:" << cmd;
-            
-            QProcess process;
-            process.setProcessChannelMode(QProcess::MergedChannels);
-            process.start("/bin/bash", QStringList() << "-c" << cmd);
-            
-            if (process.waitForStarted(2000)) {
-                // Wait max 10 seconds for cleanup command
-                if (process.waitForFinished(10000)) {
-                    QString output = process.readAll().trimmed();
-                    if (process.exitCode() == 0) {
-                        qDebug() << "[InstallationWorker] Cleanup successful:" << cmd;
-                    } else {
-                        qDebug() << "[InstallationWorker] Cleanup warning (non-critical):" << output;
-                    }
-                } else {
-                    qWarning() << "[InstallationWorker] Cleanup command timed out:" << cmd;
-                    process.kill();
-                    process.waitForFinished(1000);
-                }
-            } else {
-                qWarning() << "[InstallationWorker] Failed to start cleanup command:" << cmd;
-            }
-        }
-        
-        qDebug() << "[InstallationWorker] Cleanup completed for:" << appId;
-    } catch (const std::exception &e) {
-        qWarning() << "[InstallationWorker] Cleanup exception (non-critical):" << e.what();
-        // Never fail the overall process due to cleanup issues
-    }
-}
-
-// Add lightweight node check method
-bool InstallationWorker::checkNodeReadyQuick(const QString &nodeName)
-{
-    try {
-        QString cmd = QString("kubectl get node %1 --no-headers 2>/dev/null | grep -q Ready").arg(nodeName);
-        
-        QProcess process;
-        process.start("/bin/bash", QStringList() << "-c" << cmd);
-        
-        if (!process.waitForStarted(2000)) {
-            qDebug() << "[InstallationWorker] Node check failed to start";
-            return false;
-        }
-        
-        if (!process.waitForFinished(5000)) {
-            qDebug() << "[InstallationWorker] Node check timed out";
-            process.kill();
-            return false;
-        }
-        
-        bool isReady = (process.exitCode() == 0);
-        qDebug() << "[InstallationWorker] Node" << nodeName << "ready:" << isReady;
-        return isReady;
-        
-    } catch (const std::exception &e) {
-        qWarning() << "[InstallationWorker] Node check exception:" << e.what();
-        return false;
     }
 }
 
 //-----------------------------------------------------------------------------
-// MarketplaceViewModel - SIMPLIFIED VERSION
+// Simplified MarketplaceViewModel
 //-----------------------------------------------------------------------------
 MarketplaceViewModel::MarketplaceViewModel(QObject *parent)
   : QObject(parent)
   , m_apps(new AppListModel(this))
   , m_cats(new CategoryListModel(this))
   , m_installWorker(new InstallationWorker(this))
+  , m_jobManager(JobManager::instance())
 {
     // Load categories
     QString cfg = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
@@ -519,8 +319,12 @@ MarketplaceViewModel::MarketplaceViewModel(QObject *parent)
             this, &MarketplaceViewModel::onInstallationCompleted);
     connect(m_installWorker, &InstallationWorker::installationFailed,
             this, &MarketplaceViewModel::onInstallationFailed);
+    
+    // Connect JobManager signals for UI feedback
+    connect(m_jobManager, &JobManager::requestRejected,
+            this, &MarketplaceViewModel::onJobManagerBusy);
             
-    qDebug() << "[MarketplaceViewModel] Initialized with InstallationWorker";
+    qDebug() << "[MarketplaceViewModel] Initialized with JobManager integration";
 }
 
 void MarketplaceViewModel::setCurrentCategory(int idx) {
@@ -552,7 +356,10 @@ void MarketplaceViewModel::search(const QString &term)
 
     connect(m_searchJob, &JobBase::finished,
             this, [this](bool ok){
-        if (!ok) { emit searchError(); return; }
+        if (!ok) { 
+            emit searchError(); 
+            return; 
+        }
 
         const QList<AppInfo> apps = m_searchJob->result();
         if (apps.isEmpty()) {
@@ -560,6 +367,7 @@ void MarketplaceViewModel::search(const QString &term)
             return;
         }
 
+        // Check which apps are already installed
         QSet<QString> installed;
         DataManager dm;
         const QJsonArray arr = dm.load(m_lastSearchTerm);
@@ -581,15 +389,23 @@ void MarketplaceViewModel::search(const QString &term)
 }
 
 void MarketplaceViewModel::appSelected(int idx) {
-    QVariantMap info = m_apps->get(idx);
-
     if (idx < 0 || idx >= m_lastApps.size()) return;
+    
+    QVariantMap info = m_apps->get(idx);
+    
     if (!info.value("isInstalled").toBool()) {
+        // Check if JobManager is busy
+        if (m_jobManager->isBusy()) {
+            NOTIFY_WARNING("Installation", "System busy: " + m_jobManager->currentOperation());
+            return;
+        }
+        
         m_pendingIndex   = idx;
         m_pendingName    = info.value("name").toString();
         m_installPending = true;
         m_installingIndex = idx;
         m_isInstalling   = false;
+        
         emit pendingAppNameChanged(m_pendingName);
         emit installPendingChanged(true);
         emit installingIndexChanged(m_installingIndex);
@@ -604,13 +420,20 @@ void MarketplaceViewModel::confirmInstall()
         return;
     }
     
+    // Double-check JobManager isn't busy
+    if (m_jobManager->isBusy()) {
+        NOTIFY_WARNING("Installation", "System busy: " + m_jobManager->currentOperation());
+        cancelInstall();
+        return;
+    }
+    
     const AppInfo app = m_lastApps[m_pendingIndex];
     
-    // Update UI state immediately 
+    // Update UI state
     m_isInstalling = true;
     emit isInstallingChanged(true);
     
-    // Start installation - this should work now
+    // Start installation
     m_installWorker->startInstallation(app, m_lastSearchTerm);
     
     qDebug() << "[MarketplaceViewModel] Started installation for:" << app.name;
@@ -619,10 +442,14 @@ void MarketplaceViewModel::confirmInstall()
 void MarketplaceViewModel::cancelInstall() {
     if (!m_installPending) return;
     
-    // Cancel ongoing installation
     m_installWorker->cancelInstallation();
     
     // Reset state
+    resetInstallationState();
+}
+
+void MarketplaceViewModel::resetInstallationState()
+{
     m_installPending = false;
     m_isInstalling = false;
     m_installingIndex = -1;
@@ -631,57 +458,44 @@ void MarketplaceViewModel::cancelInstall() {
     emit installPendingChanged(false);
     emit isInstallingChanged(false);
     emit installingIndexChanged(-1);
-    
-    qDebug() << "[MarketplaceViewModel] Installation cancelled";
 }
 
 void MarketplaceViewModel::onInstallationProgress(const QString &message)
 {
-    qDebug() << "[MarketplaceViewModel] Installation progress:" << message;
     emit installProgressChanged(message);
 }
 
 void MarketplaceViewModel::onInstallationCompleted(const QString &appId)
 {
-    qDebug() << "[MarketplaceViewModel] Installation completed for:" << appId;
+    qDebug() << "[MarketplaceViewModel] Installation completed:" << appId;
     
-    // Update UI state
-    m_installPending = false;
-    m_isInstalling = false;
-    
-    emit installPendingChanged(false);
-    emit isInstallingChanged(false);
-    
-    // Update the app as installed
+    // Update app as installed
     if (m_pendingIndex >= 0) {
         m_apps->setAppInstalled(m_pendingIndex, true);
         emit installFinished();
     }
     
-    // Reset state
-    m_pendingIndex = -1;
-    m_installingIndex = -1;
-    emit installingIndexChanged(-1);
-    
-    NOTIFY_SUCCESS("Installation", "App installed successfully: " + appId);
+    resetInstallationState();
+    NOTIFY_SUCCESS("Installation", "Application installed successfully: " + appId);
 }
 
 void MarketplaceViewModel::onInstallationFailed(const QString &appId, const QString &error)
 {
-    qDebug() << "[MarketplaceViewModel] Installation failed for:" << appId << "Error:" << error;
+    qDebug() << "[MarketplaceViewModel] Installation failed:" << appId << error;
     
-    // Update UI state
-    m_installPending = false;
-    m_isInstalling = false;
-    
-    emit installPendingChanged(false);
-    emit isInstallingChanged(false);
+    resetInstallationState();
     emit installError();
     
-    // Reset state
-    m_pendingIndex = -1;
-    m_installingIndex = -1;
-    emit installingIndexChanged(-1);
-    
     NOTIFY_ERROR("Installation", "Installation failed: " + error);
+}
+
+void MarketplaceViewModel::onJobManagerBusy(const QString &reason)
+{
+    qDebug() << "[MarketplaceViewModel] JobManager busy:" << reason;
+    NOTIFY_WARNING("System Busy", reason);
+    
+    // If we have a pending installation, cancel it
+    if (m_installPending) {
+        resetInstallationState();
+    }
 }

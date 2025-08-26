@@ -110,7 +110,7 @@ Item {
         var randomOffset = Math.floor(Math.random() * 200) // 0-199ms random offset
         var adjustedDuration = duration + randomOffset
         
-        console.log("[NotificationOverlay] Setting up auto-dismiss for", id, "in", adjustedDuration, "ms (original:", duration, ")")
+        // console.log("[NotificationOverlay] Setting up auto-dismiss for", id, "in", adjustedDuration, "ms (original:", duration, ")")
         
         var timer = Qt.createQmlObject('
             import QtQuick
@@ -119,7 +119,7 @@ Item {
                 running: true
                 repeat: false
                 onTriggered: {
-                    console.log("[NotificationOverlay] QML Timer auto-dismissing notification:", notificationId)
+                    // console.log("[NotificationOverlay] QML Timer auto-dismissing notification:", notificationId)
                     if (notificationManagerInstance) {
                         notificationManagerInstance.dismissNotification(notificationId)
                     } else {
@@ -165,11 +165,11 @@ Item {
         
         try {
             notificationModel.append(notification)
-            console.log("[NotificationOverlay] Model count after append:", notificationModel.count)
+            // console.log("[NotificationOverlay] Model count after append:", notificationModel.count)
             
             // Animate in with stagger
             var index = notificationModel.count - 1
-            console.log("[NotificationOverlay] Animating notification at index:", index)
+            // console.log("[NotificationOverlay] Animating notification at index:", index)
             
             Qt.callLater(function() {
                 animateNotificationIn(index)
@@ -182,7 +182,7 @@ Item {
             
             // Limit visible notifications
             while (notificationModel.count > maxVisibleNotifications) {
-                console.log("[NotificationOverlay] Removing excess notification")
+                // console.log("[NotificationOverlay] Removing excess notification")
                 var removedNotification = notificationModel.get(0)
                 if (removedNotification && activeTimers[removedNotification.id]) {
                     // Clean up timer for removed notification
@@ -199,20 +199,20 @@ Item {
     
     // FIXED: Enhanced dismiss handling
     function handleNotificationDismissed(id) {
-        console.log("[NotificationOverlay] Handling dismissal for ID:", id)
+        // console.log("[NotificationOverlay] Handling dismissal for ID:", id)
         
         // Clean up timer first
         if (activeTimers[id]) {
             activeTimers[id].destroy()
             delete activeTimers[id]
-            console.log("[NotificationOverlay] Cleaned up timer for notification:", id)
+            // console.log("[NotificationOverlay] Cleaned up timer for notification:", id)
         }
         
         // Find and remove notification from model
         for (var i = 0; i < notificationModel.count; i++) {
             var notification = notificationModel.get(i)
             if (notification.id === id) {
-                console.log("[NotificationOverlay] Found notification to dismiss at index:", i)
+                // console.log("[NotificationOverlay] Found notification to dismiss at index:", i)
                 animateNotificationOut(i)
                 return
             }
@@ -234,7 +234,7 @@ Item {
     }
     
     function handleAllDismissed() {
-        console.log("[NotificationOverlay] Handling dismiss all notifications")
+        // console.log("[NotificationOverlay] Handling dismiss all notifications")
         
         // Clean up all timers
         for (var timerId in activeTimers) {
@@ -258,7 +258,7 @@ Item {
     
     // FIXED: Enhanced notification extension handling
     function handleNotificationExtended(id, additionalMs) {
-        console.log("[NotificationOverlay] Extending notification:", id, "by", additionalMs, "ms")
+        // console.log("[NotificationOverlay] Extending notification:", id, "by", additionalMs, "ms")
         
         // Cancel existing timer
         if (activeTimers[id]) {
@@ -278,7 +278,7 @@ Item {
         var randomOffset = Math.floor(Math.random() * 100) // 0-99ms random offset
         var adjustedDuration = duration + randomOffset
         
-        console.log("[NotificationOverlay] Setting up auto-dismiss for", id, "in", adjustedDuration, "ms (original:", duration, ")")
+        // console.log("[NotificationOverlay] Setting up auto-dismiss for", id, "in", adjustedDuration, "ms (original:", duration, ")")
         
         var timer = Qt.createQmlObject('
             import QtQuick
@@ -288,7 +288,7 @@ Item {
                 running: true
                 repeat: false
                 onTriggered: {
-                    console.log("[NotificationOverlay] QML Timer auto-dismissing notification:", notificationId)
+                    // console.log("[NotificationOverlay] QML Timer auto-dismissing notification:", notificationId)
                     if (notificationManagerInstance) {
                         notificationManagerInstance.dismissNotification(notificationId)
                     } else {
@@ -311,8 +311,8 @@ Item {
     }
 
     function animateNotificationInActual(item, index) {
-        console.log("[NotificationOverlay] Animating in notification at index:", index)
-        console.log("[NotificationOverlay] Item properties - x:", item.x, "y:", item.y, "width:", item.width, "height:", item.height)
+        // console.log("[NotificationOverlay] Animating in notification at index:", index)
+        // console.log("[NotificationOverlay] Item properties - x:", item.x, "y:", item.y, "width:", item.width, "height:", item.height)
         
         // Set initial state
         item.opacity = 0
@@ -322,7 +322,7 @@ Item {
         var targetX = getNotificationX()
         var targetY = getNotificationY(index)
         
-        console.log("[NotificationOverlay] Target position - x:", targetX, "y:", targetY)
+        // console.log("[NotificationOverlay] Target position - x:", targetX, "y:", targetY)
         
         // Set initial position (slightly offset)
         item.x = targetX + 50
@@ -332,7 +332,7 @@ Item {
         item.visible = true
         notificationModel.setProperty(index, "visible", true)
         
-        console.log("[NotificationOverlay] Starting entrance animation for index:", index)
+        // console.log("[NotificationOverlay] Starting entrance animation for index:", index)
         
         // Animate in with delay
         Qt.callLater(function() {
@@ -393,17 +393,17 @@ Item {
     function animateNotificationIn(index) {
         var item = notificationRepeater.itemAt(index)
         if (!item) {
-            console.log("[NotificationOverlay] ERROR: No item found at index", index, "- repeater count:", notificationRepeater.count)
-            console.log("[NotificationOverlay] Model count:", notificationModel.count)
+            // console.log("[NotificationOverlay] ERROR: No item found at index", index, "- repeater count:", notificationRepeater.count)
+            // console.log("[NotificationOverlay] Model count:", notificationModel.count)
             
             // Try to wait a bit and retry
             Qt.callLater(function() {
                 var retryItem = notificationRepeater.itemAt(index)
                 if (retryItem) {
-                    console.log("[NotificationOverlay] Retry successful for index:", index)
+                    // console.log("[NotificationOverlay] Retry successful for index:", index)
                     animateNotificationInActual(retryItem, index)
                 } else {
-                    console.log("[NotificationOverlay] Retry failed for index:", index)
+                    // console.log("[NotificationOverlay] Retry failed for index:", index)
                 }
             }, 100)
             return
@@ -450,34 +450,34 @@ Item {
     
     function getNotificationY(index) {
         var baseY
-        console.log("[NotificationOverlay] Calculating Y position for index:", index, "position:", position)
+        // console.log("[NotificationOverlay] Calculating Y position for index:", index, "position:", position)
         
         switch (position) {
             case "topLeft":
             case "topRight":
                 baseY = margin
                 var calculatedY = baseY + index * (notificationHeight + spacing)
-                console.log("[NotificationOverlay] Top position - baseY:", baseY, "calculatedY:", calculatedY, "index:", index)
+                // console.log("[NotificationOverlay] Top position - baseY:", baseY, "calculatedY:", calculatedY, "index:", index)
                 return calculatedY
                 
             case "bottomLeft":
             case "bottomRight":
                 baseY = parent.height - margin - notificationHeight
                 var calculatedY = baseY - index * (notificationHeight + spacing)
-                console.log("[NotificationOverlay] Bottom position - baseY:", baseY, "calculatedY:", calculatedY, "index:", index)
+                // console.log("[NotificationOverlay] Bottom position - baseY:", baseY, "calculatedY:", calculatedY, "index:", index)
                 return calculatedY
                 
             case "center":
                 var totalHeight = maxVisibleNotifications * (notificationHeight + spacing) - spacing
                 baseY = (parent.height - totalHeight) / 2
                 var calculatedY = baseY + index * (notificationHeight + spacing)
-                console.log("[NotificationOverlay] Center position - baseY:", baseY, "calculatedY:", calculatedY, "index:", index)
+                // console.log("[NotificationOverlay] Center position - baseY:", baseY, "calculatedY:", calculatedY, "index:", index)
                 return calculatedY
                 
             default:
                 baseY = margin
                 var calculatedY = baseY + index * (notificationHeight + spacing)
-                console.log("[NotificationOverlay] Default position - baseY:", baseY, "calculatedY:", calculatedY, "index:", index)
+                // console.log("[NotificationOverlay] Default position - baseY:", baseY, "calculatedY:", calculatedY, "index:", index)
                 return calculatedY
         }
     }
@@ -637,8 +637,8 @@ Item {
             
             // Debug output
             Component.onCompleted: {
-                console.log("[NotificationOverlay] Delegate created for index:", notificationIndex, 
-                        "x:", x, "y:", y, "targetX:", targetX, "targetY:", targetY)
+                // console.log("[NotificationOverlay] Delegate created for index:", notificationIndex, 
+                //         "x:", x, "y:", y, "targetX:", targetX, "targetY:", targetY)
             }
             
             // Smooth position transitions when other notifications are removed
@@ -894,10 +894,10 @@ Item {
                                 
                                 // Always allow manual dismissal
                                 if (notificationManagerInstance) {
-                                    console.log("[NotificationOverlay] Calling dismissNotification via manager")
+                                    // console.log("[NotificationOverlay] Calling dismissNotification via manager")
                                     notificationManagerInstance.dismissNotification(model.id)
                                 } else {
-                                    console.log("[NotificationOverlay] Fallback to local dismiss")
+                                    // console.log("[NotificationOverlay] Fallback to local dismiss")
                                     handleNotificationDismissed(model.id)
                                 }
                             }

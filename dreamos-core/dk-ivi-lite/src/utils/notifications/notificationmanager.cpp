@@ -465,9 +465,9 @@ QString NotificationManager::findSimilarNotification(const QString &title, const
 // ───────────────────────────────────────────────────────────────
 void NotificationManager::dismissNotification(const QString &id)
 {
-    qDebug() << "[NotificationManager] Dismissing notification:" << id 
-             << "Active count:" << m_activeNotifications.size()
-             << "Queue size:" << m_queue.size();
+    // qDebug() << "[NotificationManager] Dismissing notification:" << id 
+    //          << "Active count:" << m_activeNotifications.size()
+    //          << "Queue size:" << m_queue.size();
     
     // Clean up group mappings
     for (auto it = m_groupToNotificationMap.begin(); it != m_groupToNotificationMap.end();) {
@@ -493,8 +493,8 @@ void NotificationManager::dismissNotification(const QString &id)
         if (m_activeNotifications[i].id == id) {
             m_activeNotifications.removeAt(i);
             found = true;
-            qDebug() << "[NotificationManager] Removed notification from active list. Remaining count:" 
-                     << m_activeNotifications.size();
+            // qDebug() << "[NotificationManager] Removed notification from active list. Remaining count:" 
+            //          << m_activeNotifications.size();
             break;
         }
     }
@@ -503,7 +503,7 @@ void NotificationManager::dismissNotification(const QString &id)
     if (m_activeTasks.contains(id)) {
         m_activeTasks.remove(id);
         found = true;
-        qDebug() << "[NotificationManager] Removed notification from active tasks";
+        // qDebug() << "[NotificationManager] Removed notification from active tasks";
     }
     
     if (found) {
