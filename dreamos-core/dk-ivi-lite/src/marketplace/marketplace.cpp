@@ -246,6 +246,24 @@ QStringList InstallationWorker::buildInstallationCommands(const AppInfo &app, co
     if (manifest.isRemoteNode && !manifest.mirrorJobYaml.isEmpty()) {
         emit installationProgress("Setting up image mirroring...");
         commands << QString("kubectl apply -f %1").arg(manifest.mirrorJobYaml);
+        commands << "sleep 15";  // Initial wait
+        
+        // Check mirror job status before proceeding
+        commands << QString(R"(
+            # Check mirror job status
+            if kubectl get job mirror-%1 -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' | grep -q True; then
+                echo "Mirror job failed immediately"
+                kubectl logs job/mirror-%1 --tail=5
+                exit 1
+            elif kubectl get pods -l job-name=mirror-%1 -o jsonpath='{.items[0].status.phase}' | grep -q Pending; then
+                echo "Mirror pod stuck in Pending state"
+                exit 1
+            elif kubectl get pods -l job-name=mirror-%1 -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' | grep -qE "ImagePullBackOff|ErrImagePull"; then
+                echo "Mirror job image pull failed"
+                exit 1
+            fi
+            echo "Mirror job status check passed"
+        )").arg(app.id);
         commands << QString("kubectl wait --for=condition=complete job/mirror-%1 --timeout=300s").arg(app.id);
     }
     
@@ -253,7 +271,27 @@ QStringList InstallationWorker::buildInstallationCommands(const AppInfo &app, co
     if (!manifest.pullJobYaml.isEmpty()) {
         emit installationProgress("Pulling container image...");
         commands << QString("kubectl apply -f %1").arg(manifest.pullJobYaml);
-        commands << QString("kubectl wait --for=condition=complete job/pull-%1 --timeout=600s").arg(app.id);
+        commands << "sleep 15";  // Initial wait for job to start
+        
+        // Check pull job status before long wait
+        commands << QString(R"(
+            # Quick status check after job creation
+            if kubectl get job pull-%1 -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' | grep -q True; then
+                echo "Pull job failed immediately"
+                kubectl logs job/pull-%1 --tail=5
+                exit 1
+            elif kubectl get pods -l job-name=pull-%1 -o jsonpath='{.items[0].status.phase}' | grep -q Pending; then
+                echo "Pull pod stuck in Pending - check node resources"
+                exit 1
+            elif kubectl get pods -l job-name=pull-%1 -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' | grep -qE "ImagePullBackOff|ErrImagePull"; then
+                echo "Pull job image pull failed - check registry access"
+                exit 1
+            fi
+            echo "Pull job initial status check passed"
+        )").arg(app.id);
+        
+        // Wait for pull completion
+        commands << QString("kubectl wait --for=condition=complete job/pull-%1 --timeout=1200s").arg(app.id);
     }
     
     // Cleanup jobs after successful pull
