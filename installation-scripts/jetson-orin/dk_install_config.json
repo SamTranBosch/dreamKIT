@@ -1,0 +1,424 @@
+{
+    "metadata": {
+      "version": "2.1.0",
+      "name": "dreamOS Installation Configuration",
+      "description": "Configuration file for dreamOS installation and updates",
+      "created": "2025-01-27",
+      "schema_version": "1.0"
+    },
+    "installation": {
+      "modes": {
+        "full": {
+          "description": "Complete dreamOS installation",
+          "steps": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+          "default": true
+        },
+        "update": {
+          "description": "Software components update only",
+          "steps": [10, 11, 12],
+          "requires_existing": true
+        },
+        "minimal": {
+          "description": "Core components without IVI and zonal ECU",
+          "steps": [1, 2, 3, 4, 5, 6, 7, 8, 10, 11],
+          "default_params": {
+            "dk_ivi": false,
+            "zecu": false
+          }
+        },
+        "core": {
+          "description": "Core components only",
+          "steps": [1, 2, 3, 4, 5, 6, 10, 11],
+          "default_params": {
+            "dk_ivi": false,
+            "zecu": false
+          }
+        }
+      },
+      "default_parameters": {
+        "dk_ivi": true,
+        "zecu": true,
+        "swupdate": false,
+        "skip_prompts": false,
+        "force_update": false,
+        "backup_configs": true
+      }
+    },
+    "steps": {
+      "1": {
+        "name": "Environment Detection",
+        "description": "Analyzing system configuration and user environment",
+        "category": "system",
+        "required": true,
+        "timeout": 30,
+        "messages": {
+          "start": "Detecting system environment...",
+          "success": "Environment detection completed successfully",
+          "error": "Failed to detect system environment"
+        }
+      },
+      "2": {
+        "name": "Docker Setup", 
+        "description": "Configuring Docker environment and user permissions",
+        "category": "docker",
+        "required": true,
+        "timeout": 120,
+        "actions": [
+          {
+            "type": "create_group",
+            "name": "docker",
+            "messages": {
+              "success": "Docker group created successfully",
+              "error": "Failed to create docker group",
+              "skip": "Docker group already exists"
+            }
+          },
+          {
+            "type": "add_user_to_group",
+            "group": "docker", 
+            "messages": {
+              "success": "User added to docker group (logout required)",
+              "error": "Failed to add user to docker group"
+            }
+          }
+        ],
+        "messages": {
+          "start": "Setting up Docker environment...",
+          "success": "Docker setup completed successfully",
+          "error": "Docker setup failed"
+        }
+      },
+      "3": {
+        "name": "Runtime Configuration",
+        "description": "Setting up XDG runtime and audio parameters",
+        "category": "system",
+        "required": true,
+        "timeout": 60,
+        "dependencies": [1],
+        "messages": {
+          "start": "Configuring runtime environment...",
+          "success": "Runtime configuration completed",
+          "error": "Runtime configuration failed"
+        }
+      },
+      "4": {
+        "name": "Directory Structure",
+        "description": "Creating dreamOS directory hierarchy",
+        "category": "filesystem",
+        "required": true,
+        "timeout": 30,
+        "dependencies": [3],
+        "paths": [
+          "/home/{user}/.dk/dk_swupdate",
+          "/home/{user}/.dk/dk_swupdate/dk_patch",
+          "/home/{user}/.dk/dk_swupdate/dk_current",
+          "/home/{user}/.dk/dk_swupdate/dk_current_patch",
+          "/home/{user}/.dk/sdv-runtime"
+        ],
+        "messages": {
+          "start": "Creating directory structure...",
+          "success": "Directory structure created successfully",
+          "error": "Failed to create directory structure"
+        }
+      },
+      "5": {
+        "name": "Network Setup",
+        "description": "Establishing Docker network infrastructure", 
+        "category": "network",
+        "required": true,
+        "timeout": 60,
+        "dependencies": [2],
+        "actions": [
+          {
+            "type": "create_docker_network",
+            "name": "dk_network",
+            "messages": {
+              "success": "Docker network 'dk_network' ready",
+              "error": "Network setup encountered issues"
+            }
+          }
+        ],
+        "messages": {
+          "start": "Setting up Docker networks...",
+          "success": "Network setup completed",
+          "error": "Network setup failed"
+        }
+      },
+      "6": {
+        "name": "Dependencies",
+        "description": "Installing required system utilities and tools",
+        "category": "packages",
+        "required": true,
+        "timeout": 600,
+        "dependencies": [2],
+        "script": "scripts/install_dependencies.sh",
+        "messages": {
+          "start": "Installing system dependencies...",
+          "success": "Dependencies installation completed",
+          "error": "Dependencies installation failed"
+        }
+      },
+      "7": {
+        "name": "Docker Registry",
+        "description": "Setting up local Docker registry",
+        "category": "docker",
+        "required": true,
+        "timeout": 180,
+        "dependencies": [5, 6],
+        "script": "scripts/setup_local_docker_registry.sh",
+        "messages": {
+          "start": "Setting up local Docker registry...",
+          "success": "Docker registry setup completed",
+          "error": "Docker registry setup failed"
+        }
+      },
+      "8": {
+        "name": "K3s Master",
+        "description": "K3s master installation & preparation for local registry",
+        "category": "kubernetes",
+        "required": true,
+        "timeout": 300,
+        "dependencies": [6, 7],
+        "script": "scripts/k3s-master-prepare.sh",
+        "parameters": {
+          "network_interface": "eth0"
+        },
+        "messages": {
+          "start": "Setting up K3s master...",
+          "success": "K3s master setup completed",
+          "error": "K3s master setup failed"
+        }
+      },
+      "9": {
+        "name": "Zonal ECU Setup",
+        "description": "NXP-S32G k3s-agent installation & configuration",
+        "category": "kubernetes",
+        "required": false,
+        "conditional": "zecu",
+        "timeout": 600,
+        "dependencies": [8],
+        "script": "scripts/k3s-agent-offline-install.sh",
+        "target": {
+          "ip": "192.168.56.49",
+          "ping_count": 3,
+          "ping_timeout": 2,
+          "interactive": true
+        },
+        "messages": {
+          "start": "Setting up Zonal ECU (NXP-S32G)...",
+          "success": "Zonal ECU setup completed",
+          "error": "Zonal ECU setup failed",
+          "skip": "Zonal ECU setup skipped",
+          "reachable": "ECU reachable",
+          "unreachable": "Could not reach ECU"
+        }
+      },
+      "10": {
+        "name": "SDV Runtime",
+        "description": "Software Defined Vehicle runtime environment",
+        "category": "application",
+        "required": true,
+        "timeout": 600,
+        "dependencies": [8],
+        "images": [
+          {
+            "name": "ghcr.io/eclipse-autowrx/sdv-runtime:latest",
+            "pull_job": "sdv-runtime-pull.yaml", 
+            "deployment": "sdv-runtime.yaml",
+            "pull_timeout": 300,
+            "retry_count": 3,
+            "retry_delay": 10,
+            "messages": {
+              "pull_start": "Pulling SDV Runtime image...",
+              "pull_success": "SDV Runtime image pulled successfully",
+              "pull_error": "SDV Runtime image pull failed",
+              "deploy_success": "SDV Runtime deployment ready",
+              "deploy_error": "SDV Runtime deployment failed"
+            }
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "setup_vss",
+            "script": "scripts/setup_default_vss.sh",
+            "check_existing": true,
+            "messages": {
+              "success": "VSS configuration setup completed",
+              "error": "VSS configuration setup failed",
+              "skip": "VSS configuration already exists"
+            }
+          }
+        ],
+        "messages": {
+          "start": "Setting up SDV Runtime...",
+          "success": "SDV Runtime setup completed",
+          "error": "SDV Runtime setup failed"
+        }
+      },
+      "11": {
+        "name": "DreamKit Manager",
+        "description": "Core management services",
+        "category": "application",
+        "required": true,
+        "timeout": 300,
+        "dependencies": [10],
+        "images": [
+          {
+            "name": "ghcr.io/eclipse-autowrx/dk_manager:latest",
+            "pull_job": "dk-manager-pull.yaml",
+            "deployment": "dk-manager.yaml",
+            "pull_timeout": 300,
+            "retry_count": 2,
+            "messages": {
+              "pull_start": "Pulling DreamKit Manager image...",
+              "pull_success": "DreamKit Manager image pulled successfully",
+              "pull_error": "DreamKit Manager image pull failed",
+              "deploy_success": "DreamKit Manager deployment ready",
+              "deploy_error": "DreamKit Manager deployment failed"
+            }
+          }
+        ],
+        "messages": {
+          "start": "Setting up DreamKit Manager...",
+          "success": "DreamKit Manager setup completed",
+          "error": "DreamKit Manager setup failed"
+        }
+      },
+      "12": {
+        "name": "IVI Interface",
+        "description": "In-Vehicle Infotainment system",
+        "category": "application",
+        "required": false,
+        "conditional": "dk_ivi",
+        "timeout": 600,
+        "dependencies": [10, 11],
+        "images": [
+          {
+            "name": "ghcr.io/samtranbosch/dk_ivi:latest",
+            "pull_job": "dk-ivi-pull.yaml",
+            "deployment": "dk-ivi.yaml",
+            "deployment_jetson": "dk-ivi-jetson.yaml",
+            "pull_timeout": 300,
+            "retry_count": 3,
+            "messages": {
+              "pull_start": "Pulling IVI interface image...",
+              "pull_success": "IVI interface image pulled successfully",
+              "pull_error": "IVI interface image pull failed",
+              "deploy_success": "IVI interface deployment ready",
+              "deploy_error": "IVI interface deployment failed"
+            }
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "setup_x11",
+            "script": "scripts/dk_enable_xhost.sh",
+            "messages": {
+              "success": "X11 forwarding enabled",
+              "error": "X11 setup failed"
+            }
+          },
+          {
+            "type": "grant_x11_access",
+            "command": "xhost +local:docker",
+            "messages": {
+              "success": "Docker X11 access granted",
+              "error": "X11 access failed"
+            }
+          }
+        ],
+        "platform_specific": {
+          "jetson": {
+            "detection_file": "/etc/nv_tegra_release",
+            "manifest": "dk-ivi-jetson.yaml"
+          },
+          "default": {
+            "manifest": "dk-ivi.yaml"
+          }
+        },
+        "messages": {
+          "start": "Setting up IVI Interface...",
+          "success": "IVI Interface setup completed", 
+          "error": "IVI Interface setup failed",
+          "skip": "IVI Interface installation skipped"
+        }
+      }
+    },
+    "post_install": {
+      "actions": [
+        {
+          "type": "save_environment",
+          "file": "/home/{user}/.dk/dk_swupdate/dk_swupdate_env.sh",
+          "messages": {
+            "success": "Environment configuration saved",
+            "error": "Failed to save environment configuration"
+          }
+        },
+        {
+          "type": "create_service",
+          "script": "scripts/create_dk_xiphost_service.sh",
+          "messages": {
+            "success": "Additional services configured",
+            "error": "Service configuration warning"
+          }
+        },
+        {
+          "type": "cleanup",
+          "commands": ["docker image prune -f"],
+          "messages": {
+            "success": "Docker cleanup completed",
+            "error": "Cleanup warning"
+          }
+        }
+      ],
+      "notifications": {
+        "reboot_required": true,
+        "logout_required": true,
+        "success_message": "dreamOS installation completed successfully!"
+      }
+    },
+    "environment": {
+      "docker_namespaces": {
+        "main": "ghcr.io/eclipse-autowrx",
+        "ivi": "ghcr.io/samtranbosch"
+      },
+      "timeouts": {
+        "default_step": 300,
+        "docker_pull": 300,
+        "kubectl_wait": 600
+      },
+      "retry": {
+        "default_count": 3,
+        "default_delay": 10,
+        "max_delay": 60
+      }
+    },
+    "messages": {
+      "installation": {
+        "welcome": "Welcome to the dreamOS Installation Experience!",
+        "ready": "Ready to begin your journey?",
+        "starting": "Starting installation...",
+        "completed": "Installation completed successfully!",
+        "failed": "Installation failed!",
+        "thanks": "Thank you for choosing dreamOS!"
+      },
+      "validation": {
+        "config_loaded": "Configuration loaded successfully",
+        "config_validated": "Configuration validation passed",
+        "prerequisites_passed": "Prerequisites validation completed"
+      },
+      "common": {
+        "timeout": "Operation timed out",
+        "retry": "Retrying operation",
+        "skip": "Skipping step",
+        "processing": "Processing...",
+        "cleanup": "Cleaning up..."
+      }
+    },
+    "logging": {
+      "level": "info",
+      "file": "/tmp/dk_install.log", 
+      "console": true,
+      "timestamp": true
+    }
+}
