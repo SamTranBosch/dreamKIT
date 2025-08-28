@@ -26,7 +26,7 @@ SPINNER_FRAMES=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
 PROGRESS_CHARS=("▱" "▰")
 
 # Global variables for progress tracking
-TOTAL_STEPS=12
+TOTAL_STEPS=13
 CURRENT_STEP=0
 
 # Parse command line arguments early
@@ -355,6 +355,52 @@ docker_pull_with_info() {
     return 1
 }
 
+# Function to show K3s cluster information
+show_k3s_cluster_info() {
+    # Quick cluster check
+    if ! command -v kubectl &> /dev/null || ! kubectl cluster-info &> /dev/null; then
+        show_error "K3s cluster not accessible"
+        return 1
+    fi
+    
+    show_success "K3s cluster accessible"
+    
+    # Display node information
+    echo -e "\n${BLUE}${BOLD}Node Status:${NC}"
+    kubectl get nodes -o wide --no-headers 2>/dev/null | while IFS= read -r line; do
+        echo -e "${GREEN}  ✓ $line${NC}"
+    done
+    
+    echo -e "\n${BLUE}${BOLD}Unique Container Images and Image IDs${NC}"
+    
+    # Get image data efficiently
+    local image_data=$(kubectl get pods --all-namespaces \
+      -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.image}{"\t"}{.imageID}{"\n"}{end}{end}' 2>/dev/null)
+    
+    if [ -n "$image_data" ]; then
+        # Simple header
+        printf "%-50s %s\n" "IMAGE" "IMAGE_ID"
+        echo "$(printf '%*s' 120 '' | tr ' ' '-')"
+        
+        # Remove duplicates and display unique image-to-imageID mappings
+        echo "$image_data" | sort -u | while IFS=$'\t' read -r image image_id; do
+            # Remove only protocol prefix
+            clean_id=$(echo "$image_id" | sed 's/.*:\/\///')
+            printf "%-50s %s\n" "$image" "$clean_id"
+        done
+        
+        # Quick summary
+        local total=$(echo "$image_data" | wc -l)
+        local unique=$(echo "$image_data" | sort -u | wc -l)
+        echo -e "\n${GREEN}Unique mappings: $unique (from $total total containers)${NC}"
+        
+    else
+        show_info "No images found"
+    fi
+    
+    show_success "Node status and unique image information displayed"
+}
+
 force_deployment_update() {
     local deployment_name=$1
     local namespace=${2:-default}
@@ -679,6 +725,13 @@ perform_software_updates() {
             show_info "IVI installation skipped (you can install later with './dk_install dk_ivi=true')"
         fi
     fi
+
+    ###############################################################################
+    # Step 13   K3s Cluster Information
+    ###############################################################################
+    step_num=$((13 - step_offset))
+    show_step $step_num "K3s Cluster Information" "Displaying node status, images and image IDs"
+    show_k3s_cluster_info
 }
 
 # Enhanced main installation function
