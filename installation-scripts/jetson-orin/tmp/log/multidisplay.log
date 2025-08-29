@@ -1,0 +1,142 @@
+Aug 29 14:27:30 ubuntu dk_enable_xhost.sh[508195]: [ERROR] Failed to start display :1
+sdv-orin@ubuntu:~/working/dreamKIT/installation-scripts/jetson-orin/scripts$ sudo ./dk-multi-display.sh install-service 4
+[INFO] Detected user: sdv-orin
+[INFO] User home directory: /home/sdv-orin
+[INFO] User ID: 1000, Group ID: 1000
+[INFO] Install directory: /home/sdv-orin/.dk/sys-service
+[DOCKER] Docker installation detected
+[DOCKER] User sdv-orin is in docker group
+[DOCKER] Docker daemon is running
+[INFO] Creating systemd service for 4 displays
+[SUCCESS] Systemd service created: dk-multi-display.service
+[SUCCESS] Script path: /home/sdv-orin/.dk/sys-service/dk_enable_xhost.sh
+[INFO] Enable with: sudo systemctl enable dk-multi-display
+[INFO] Start with: sudo systemctl start dk-multi-display
+[WARNING] Service file may have issues, check with: systemctl status dk-multi-display
+sdv-orin@ubuntu:~/working/dreamKIT/installation-scripts/jetson-orin/scripts$ sudo systemctl disable dk-multi-display
+Removed /etc/systemd/system/graphical.target.wants/dk-multi-display.service.
+sdv-orin@ubuntu:~/working/dreamKIT/installation-scripts/jetson-orin/scripts$ sudo systemctl enable dk-multi-display
+Created symlink /etc/systemd/system/graphical.target.wants/dk-multi-display.service → /etc/systemd/system/dk-multi-display.service.
+sdv-orin@ubuntu:~/working/dreamKIT/installation-scripts/jetson-orin/scripts$ sudo systemctl start dk-multi-display
+Job for dk-multi-display.service failed because the service did not take the steps required by its unit configuration.
+See "systemctl status dk-multi-display.service" and "journalctl -xe" for details.
+sdv-orin@ubuntu:~/working/dreamKIT/installation-scripts/jetson-orin/scripts$ systemctl status dk-multi-display
+● dk-multi-display.service - Multi-Display X Server with Docker Support
+     Loaded: loaded (/etc/systemd/system/dk-multi-display.service; enabled; vendor preset: enabled)
+     Active: activating (auto-restart) (Result: protocol) since Fri 2025-08-29 14:28:37 +07; 3s ago
+    Process: 509365 ExecStart=/home/sdv-orin/.dk/sys-service/dk_enable_xhost.sh start-service 4 (code=exited, status=0/SUCCESS)
+sdv-orin@ubuntu:~/working/dreamKIT/installation-scripts/jetson-orin/scripts$ systemctl status dk-multi-display
+● dk-multi-display.service - Multi-Display X Server with Docker Support
+     Loaded: loaded (/etc/systemd/system/dk-multi-display.service; enabled; vendor preset: enabled)
+     Active: activating (auto-restart) (Result: protocol) since Fri 2025-08-29 14:28:37 +07; 9s ago
+    Process: 509365 ExecStart=/home/sdv-orin/.dk/sys-service/dk_enable_xhost.sh start-service 4 (code=exited, status=0/SUCCESS)
+sdv-orin@ubuntu:~/working/dreamKIT/installation-scripts/jetson-orin/scripts$ systemctl status dk-multi-display
+● dk-multi-display.service - Multi-Display X Server with Docker Support
+     Loaded: loaded (/etc/systemd/system/dk-multi-display.service; enabled; vendor preset: enabled)
+     Active: activating (start) since Fri 2025-08-29 14:28:47 +07; 9s ago
+Cntrl PID: 511392 (dk_enable_xhost)
+      Tasks: 2 (limit: 36387)
+     Memory: 888.0K
+     CGroup: /system.slice/dk-multi-display.service
+             ├─511392 /bin/bash /home/sdv-orin/.dk/sys-service/dk_enable_xhost.sh start-service 4
+             └─511753 sleep 1
+
+Aug 29 14:28:52 ubuntu runuser[511643]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:28:52 ubuntu runuser[511643]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:28:53 ubuntu runuser[511654]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:28:53 ubuntu runuser[511654]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:28:54 ubuntu runuser[511695]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:28:54 ubuntu runuser[511695]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:28:55 ubuntu runuser[511741]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:28:55 ubuntu runuser[511741]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:28:56 ubuntu runuser[511751]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:28:56 ubuntu runuser[511751]: pam_unix(runuser:session): session closed for user sdv-orin
+sdv-orin@ubuntu:~/working/dreamKIT/installation-scripts/jetson-orin/scripts$ systemctl status dk-multi-display
+● dk-multi-display.service - Multi-Display X Server with Docker Support
+     Loaded: loaded (/etc/systemd/system/dk-multi-display.service; enabled; vendor preset: enabled)
+     Active: activating (start) since Fri 2025-08-29 14:28:47 +07; 17s ago
+Cntrl PID: 511392 (dk_enable_xhost)
+      Tasks: 2 (limit: 36387)
+     Memory: 904.0K
+     CGroup: /system.slice/dk-multi-display.service
+             ├─511392 /bin/bash /home/sdv-orin/.dk/sys-service/dk_enable_xhost.sh start-service 4
+             └─512057 sleep 1
+
+Aug 29 14:29:00 ubuntu runuser[511890]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:00 ubuntu runuser[511890]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:29:01 ubuntu runuser[511911]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:01 ubuntu runuser[511911]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:29:02 ubuntu runuser[511959]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:02 ubuntu runuser[511959]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:29:03 ubuntu runuser[512005]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:03 ubuntu runuser[512005]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:29:04 ubuntu runuser[512055]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:04 ubuntu runuser[512055]: pam_unix(runuser:session): session closed for user sdv-orin
+sdv-orin@ubuntu:~/working/dreamKIT/installation-scripts/jetson-orin/scripts$ sudo ./dk-multi-display.sh list
+[INFO] Detected user: sdv-orin
+[INFO] User home directory: /home/sdv-orin
+[INFO] User ID: 1000, Group ID: 1000
+[INFO] Install directory: /home/sdv-orin/.dk/sys-service
+[DOCKER] Docker installation detected
+[DOCKER] User sdv-orin is in docker group
+[DOCKER] Docker daemon is running
+Active Displays:
+===============
+  :0 - System Display (Physical) - Access rules: 0
+0
+  No virtual displays found
+
+Docker Status:
+  ✓ Docker support enabled
+  ✓ User in docker group
+
+Installation Status:
+  ✓ Script installed at: /home/sdv-orin/.dk/sys-service/dk_enable_xhost.sh
+sdv-orin@ubuntu:~/working/dreamKIT/installation-scripts/jetson-orin/scripts$ systemctl status dk-multi-display
+● dk-multi-display.service - Multi-Display X Server with Docker Support
+     Loaded: loaded (/etc/systemd/system/dk-multi-display.service; enabled; vendor preset: enabled)
+     Active: activating (start) since Fri 2025-08-29 14:28:47 +07; 29s ago
+Cntrl PID: 511392 (dk_enable_xhost)
+      Tasks: 2 (limit: 36387)
+     Memory: 916.0K
+     CGroup: /system.slice/dk-multi-display.service
+             ├─511392 /bin/bash /home/sdv-orin/.dk/sys-service/dk_enable_xhost.sh start-service 4
+             └─512614 sleep 1
+
+Aug 29 14:29:13 ubuntu runuser[512433]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:13 ubuntu runuser[512433]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:29:14 ubuntu runuser[512467]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:14 ubuntu runuser[512467]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:29:15 ubuntu runuser[512521]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:15 ubuntu runuser[512521]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:29:16 ubuntu runuser[512559]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:16 ubuntu runuser[512559]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:29:17 ubuntu runuser[512607]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:17 ubuntu runuser[512607]: pam_unix(runuser:session): session closed for user sdv-orin
+sdv-orin@ubuntu:~/working/dreamKIT/installation-scripts/jetson-orin/scripts$ systemctl status dk-multi-display
+● dk-multi-display.service - Multi-Display X Server with Docker Support
+     Loaded: loaded (/etc/systemd/system/dk-multi-display.service; enabled; vendor preset: enabled)
+     Active: activating (start) since Fri 2025-08-29 14:28:47 +07; 36s ago
+Cntrl PID: 511392 (dk_enable_xhost)
+      Tasks: 2 (limit: 36387)
+     Memory: 912.0K
+     CGroup: /system.slice/dk-multi-display.service
+             ├─511392 /bin/bash /home/sdv-orin/.dk/sys-service/dk_enable_xhost.sh start-service 4
+             └─512844 sleep 1
+
+Aug 29 14:29:21 ubuntu runuser[512757]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:21 ubuntu runuser[512759]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:21 ubuntu runuser[512757]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:29:21 ubuntu runuser[512759]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:29:22 ubuntu runuser[512781]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:22 ubuntu runuser[512781]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:29:23 ubuntu runuser[512834]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:23 ubuntu runuser[512834]: pam_unix(runuser:session): session closed for user sdv-orin
+Aug 29 14:29:24 ubuntu runuser[512842]: pam_unix(runuser:session): session opened for user sdv-orin by (uid=0)
+Aug 29 14:29:24 ubuntu runuser[512842]: pam_unix(runuser:session): session closed for user sdv-orin
+sdv-orin@ubuntu:~/working/dreamKIT/installation-scripts/jetson-orin/scripts$ systemctl status dk-multi-display
+● dk-multi-display.service - Multi-Display X Server with Docker Support
+     Loaded: loaded (/etc/systemd/system/dk-multi-display.service; enabled; vendor preset: enabled)
+     Active: activating (auto-restart) (Result: protocol) since Fri 2025-08-29 14:30:26 +07; 1s ago
+    Process: 513512 ExecStart=/home/sdv-orin/.dk/sys-service/dk_enable_xhost.sh start-service 4 (code=exited, status=0/SUCCESS)
+sdv-orin@ubuntu:~/working/dreamKIT/installation-scripts/jetson-orin/scripts$ systemctl status dk-multi-display
