@@ -117,6 +117,14 @@ private:
     void triggerStatusUpdateIfNeeded();
     bool canPerformOperation(const QString &operation) const;
 
+    // helper method declarations
+    bool tryAcquireLocalOperation(const QString &operation);
+    void releaseLocalOperation();
+    // member variables for request management (add to existing private section)
+    mutable QMutex m_operationMutex;
+    bool m_operationInProgress {false};
+    QString m_currentLocalOperation;
+    
     // Core data
     QList<TI>             m_items;
     InstalledCheckThread *m_checkThread {nullptr};
@@ -551,12 +559,51 @@ void InstalledAsyncBase<TI,TD>::invalidateStatusCache()
 template<class TI,class TD>
 bool InstalledAsyncBase<TI,TD>::canPerformOperation(const QString &operation) const
 {
+    // First check local operation lock
+    {
+        QMutexLocker locker(&m_operationMutex);
+        if (m_operationInProgress) {
+            QString reason = QString("Service operation in progress: %1 (requested: %2)")
+                .arg(m_currentLocalOperation, operation);
+            NOTIFY_WARNING(operation, reason);
+            qDebug() << "[InstalledAsyncBase]" << reason;
+            return false;
+        }
+    }
+    
+    // Then check JobManager state
     if (m_jobManager->isBusy()) {
         QString reason = QString("System busy: %1").arg(m_jobManager->currentOperation());
         NOTIFY_WARNING(operation, reason);
         return false;
     }
+    
     return true;
+}
+
+// these helper methods for operation management:
+template<class TI,class TD>
+bool InstalledAsyncBase<TI,TD>::tryAcquireLocalOperation(const QString &operation)
+{
+    QMutexLocker locker(&m_operationMutex);
+    if (m_operationInProgress) {
+        return false;
+    }
+    
+    m_operationInProgress = true;
+    m_currentLocalOperation = operation;
+    qDebug() << "[InstalledAsyncBase] Local operation acquired:" << operation;
+    return true;
+}
+
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::releaseLocalOperation()
+{
+    QMutexLocker locker(&m_operationMutex);
+    QString completedOperation = m_currentLocalOperation;
+    m_operationInProgress = false;
+    m_currentLocalOperation.clear();
+    qDebug() << "[InstalledAsyncBase] Local operation released:" << completedOperation;
 }
 
 /* ------------ cleanup monitoring ----------------------------- */
@@ -653,7 +700,16 @@ void InstalledAsyncBase<TI,TD>::executeServices(
 {
     if (idx < 0 || idx >= m_items.size()) return;
 
-    if (!canPerformOperation("Service Deployment")) {
+    const QString operation = QString("%1 %2").arg(subscribe ? "Deploy" : "Stop", id);
+    
+    // Check if we can perform the operation (includes both local and JobManager checks)
+    if (!canPerformOperation(operation)) {
+        return;
+    }
+    
+    // Try to acquire local operation lock
+    if (!tryAcquireLocalOperation(operation)) {
+        NOTIFY_WARNING(operation, "Another service operation is already in progress");
         return;
     }
 
@@ -669,13 +725,15 @@ void InstalledAsyncBase<TI,TD>::executeServices(
     // Use JobManager for deployment
     auto *job = m_jobManager->deployService(deployInfo);
     
-    connect(job, &Async::JobBase::finished, this, [this, idx, id, subscribe, job](bool success) {
+    connect(job, &Async::JobBase::finished, this, [this, idx, id, subscribe, job, operation](bool success) {
         if (success) {
             K3s::JobManager::JobResult result = job->result();
             
             if (result.success) {
                 // Update local model
-                m_items[idx].isSubscribed = subscribe;
+                if (idx < m_items.size()) {  // Safety check
+                    m_items[idx].isSubscribed = subscribe;
+                }
                 
                 // Update status cache immediately
                 {
@@ -701,8 +759,12 @@ void InstalledAsyncBase<TI,TD>::executeServices(
                 m_checkThread->notifyState(false);
                 qWarning() << "[InstalledAsyncBase] Service deployment failed:" << result.errorMessage;
             }
+        } else {
+            qWarning() << "[InstalledAsyncBase] Service deployment job failed for:" << id;
         }
         
+        // Always release the local operation lock
+        releaseLocalOperation();
         job->deleteLater();
     });
 }
@@ -713,13 +775,21 @@ void InstalledAsyncBase<TI,TD>::removeServices(int idx)
 {
     if (idx < 0 || idx >= m_items.size()) return;
 
-    if (!canPerformOperation("Service Removal")) {
+    const QString id = m_items[idx].id;
+    const QString operation = QString("Remove %1").arg(id);
+    
+    // Check if we can perform the operation
+    if (!canPerformOperation(operation)) {
+        return;
+    }
+    
+    // Try to acquire local operation lock
+    if (!tryAcquireLocalOperation(operation)) {
+        NOTIFY_WARNING(operation, "Another service operation is already in progress");
         return;
     }
 
-    const QString id = m_items[idx].id;
     const QString yaml = deploymentYaml(id);
-
     qDebug() << "[InstalledAsyncBase] Removing service:" << id;
 
     // Remove from status cache immediately
@@ -728,77 +798,52 @@ void InstalledAsyncBase<TI,TD>::removeServices(int idx)
         m_deploymentStatusCache.remove(id);
     }
 
-    // Create chain for removal process
-    auto *chain = new Async::Chain(this);
-    auto ok = std::make_shared<bool>(true);
-    auto errText = std::make_shared<QString>();
-
-    // Step 1: Update database
-    chain->add([=](){
-        try {
-            DataManager dm;
-            QJsonArray in = dm.load(dbKey()), out;
-            for (auto v : in)
-                if (v.toObject().value("id").toString() != id)
-                    out.append(v);
-            dm.save(dbKey(), out);
-        } catch (const std::exception &e) {
-            *ok = false;
-            *errText = QString("DB error: %1").arg(e.what());
+    // Use JobManager for removal instead of creating a custom chain
+    auto *job = m_jobManager->removeService(id, yaml);
+    
+    connect(job, &Async::JobBase::finished, this, [this, idx, id, job, operation](bool success) {
+        bool removalSuccess = false;
+        
+        if (success) {
+            K3s::JobManager::JobResult result = job->result();
+            removalSuccess = result.success;
+            
+            if (removalSuccess) {
+                // Update database in main thread
+                QMetaObject::invokeMethod(this, [this, id]() {
+                    try {
+                        DataManager dm;
+                        QJsonArray in = dm.load(dbKey()), out;
+                        for (auto v : in) {
+                            if (v.toObject().value("id").toString() != id) {
+                                out.append(v);
+                            }
+                        }
+                        dm.save(dbKey(), out);
+                        
+                        // Update local list and refresh UI
+                        QTimer::singleShot(100, this, [this]() {
+                            initInstalledFromDB();
+                        });
+                        
+                    } catch (const std::exception &e) {
+                        qWarning() << "[InstalledAsyncBase] DB update failed:" << e.what();
+                        NOTIFY_ERROR("Remove Service", QString("Failed to update database: %1").arg(e.what()));
+                    }
+                }, Qt::QueuedConnection);
+                
+                NOTIFY_SUCCESS("Remove Service", QString("%1 removed successfully").arg(id));
+            } else {
+                NOTIFY_ERROR("Remove Service", QString("Failed to remove %1: %2").arg(id, result.errorMessage));
+            }
+        } else {
+            NOTIFY_ERROR("Remove Service", QString("Failed to remove %1: Job execution failed").arg(id));
         }
-        return *ok;
-    });
-
-    // Step 2: Use JobManager for removal
-    chain->add([=](){
-        if (!*ok) return false;
         
-        auto *job = m_jobManager->removeService(id, yaml);
-        QEventLoop loop;
-        
-        connect(job, &Async::JobBase::finished, &loop, [&](bool success) {
-            if (success) {
-                K3s::JobManager::JobResult result = job->result();
-                if (!result.success) {
-                    *ok = false;
-                    *errText = result.errorMessage;
-                }
-            } else {
-                *ok = false;
-                *errText = "Job execution failed";
-            }
-            loop.quit();
-        });
-        
-        loop.exec();
+        // Always release the local operation lock
+        releaseLocalOperation();
         job->deleteLater();
-        return *ok;
     });
-
-    // Step 3: Update local list
-    chain->add([this, idx](){
-        QMetaObject::invokeMethod(qApp, [this, idx]() {
-            if (idx < m_items.size())
-                m_items.removeAt(idx);
-        }, Qt::BlockingQueuedConnection);
-        return true;
-    });
-
-    // Step 4: Show result and refresh
-    chain->add([this, id, ok, errText](){
-        QMetaObject::invokeMethod(qApp, [this, id, ok, errText]() {
-            if (*ok) {
-                NOTIFY_SUCCESS("Service", QString("%1 removed").arg(id));
-                initInstalledFromDB();
-            } else {
-                NOTIFY_ERROR("Service", QString("Failed to remove %1: %2").arg(id, *errText));
-            }
-        }, Qt::QueuedConnection);
-        return true;
-    });
-
-    connect(chain, &Async::Chain::finished, chain, &QObject::deleteLater);
-    chain->start();
 }
 
 /* ------------ restart methods (delegate to AutoRestartManager) */
