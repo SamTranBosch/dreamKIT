@@ -3,12 +3,10 @@ kind: Deployment
 metadata:
   name: sdv-runtime
   namespace: default
-  # Add annotation to force new pod creation
   annotations:
     deployment.kubernetes.io/revision: "1"
 spec:
   replicas: 1
-  # Enhanced strategy to prevent sandbox conflicts
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -21,7 +19,6 @@ spec:
     metadata:
       labels:
         app: sdv-runtime
-      # Add unique annotation to force pod recreation
       annotations:
         restart-timestamp: "{{ .Values.timestamp | default now }}"
         pod.kubernetes.io/sandbox-cleanup: "force"
@@ -30,9 +27,8 @@ spec:
         kubernetes.io/hostname: xip
       hostNetwork: true
       restartPolicy: Always
-      terminationGracePeriodSeconds: 60  # Increased for proper cleanup
+      terminationGracePeriodSeconds: 30  # Reduced from 60 for faster cleanup
       
-      # Add tolerations for node issues (KEY ADDITION)
       tolerations:
       - key: "node.kubernetes.io/unreachable"
         operator: "Exists"
@@ -64,35 +60,32 @@ spec:
           echo "Starting VSS initialization with sandbox cleanup awareness..."
           
           # Add delay to prevent rapid restart loops and allow cleanup
-          echo "Waiting for system stabilization..."
-          sleep 20
+          echo "Brief system stabilization..."
+          sleep 5  # Reduced from 20
           
           echo "Initializing VSS file (offline mode)..."
-          mkdir -p /persistent
-          mkdir -p /shared
+          mkdir -p /persistent /shared
           
-          # Load from persistent storage or create default
+          # Parallel operations where possible
           if [ -f /persistent/vss.json ]; then
-            echo "Loading existing VSS file from persistent storage"
-            cp /persistent/vss.json /shared/vss.json
+            echo "Loading existing VSS file"
+            cp /persistent/vss.json /shared/vss.json &
           fi
           
+          wait  # Wait for background copy
           chmod 666 /shared/vss.json
           
-          # Additional stability check
-          echo "Performing final initialization check..."
-          sleep 5
-          
-          echo "VSS initialization complete (offline)"
+          # Minimal final check
+          sleep 2  # Reduced from 5
+          echo "VSS initialization complete"
         
-        # Add resource limits
         resources:
           requests:
             memory: "32Mi"
-            cpu: "25m"
+            cpu: "50m"  # Slightly increased for faster processing
           limits:
             memory: "64Mi"
-            cpu: "100m"
+            cpu: "200m"  # Increased limit for init speed
         
         volumeMounts:
         - name: persistent-storage
@@ -105,49 +98,49 @@ spec:
         image: ghcr.io/eclipse-autowrx/sdv-runtime:latest
         imagePullPolicy: IfNotPresent
         
-        # Add startup probe to handle slow startups (KEY ADDITION)
+        # Faster startup probe with more aggressive timing
         startupProbe:
           tcpSocket:
             port: 55555
-          initialDelaySeconds: 45
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 12  # Allow 2 minutes for startup
+          initialDelaySeconds: 20  # Reduced from 45
+          periodSeconds: 5         # Reduced from 10
+          timeoutSeconds: 3        # Reduced from 5
+          failureThreshold: 15     # Increased to maintain total time but check faster
         
-        # Add readiness probe
+        # Faster readiness probe
         readinessProbe:
           tcpSocket:
             port: 55555
-          initialDelaySeconds: 60
-          periodSeconds: 15
-          timeoutSeconds: 10
+          initialDelaySeconds: 25  # Reduced from 60
+          periodSeconds: 5         # Reduced from 15
+          timeoutSeconds: 3        # Reduced from 10
           failureThreshold: 3
         
-        # Add liveness probe with generous timeouts
+        # Optimized liveness probe
         livenessProbe:
           tcpSocket:
             port: 55555
-          initialDelaySeconds: 90
-          periodSeconds: 30
-          timeoutSeconds: 15
-          failureThreshold: 5
+          initialDelaySeconds: 35  # Reduced from 90
+          periodSeconds: 15        # Reduced from 30
+          timeoutSeconds: 5        # Reduced from 15
+          failureThreshold: 3      # Reduced from 5 for faster detection
         
-        # Add resource limits
+        # Increased resource requests for faster startup
         resources:
           requests:
             memory: "128Mi"
-            cpu: "100m"
+            cpu: "200m"  # Doubled for faster startup
           limits:
             memory: "512Mi"
-            cpu: "500m"
+            cpu: "1000m"  # Increased limit for peak performance
         
         env:
         - name: USER
-          value: "developer"
+          value: "sdv-orin"
         - name: RUNTIME_NAME
-          value: "dreamKIT-d21bb4a3"
+          value: "dreamKIT-22090f65"
         - name: ARCH
-          value: "amd64"
+          value: "arm64"
         - name: OFFLINE_MODE
           value: "true"
         
@@ -164,32 +157,32 @@ spec:
         image: ghcr.io/eclipse-autowrx/sdv-runtime:latest
         imagePullPolicy: IfNotPresent
         
-        # Add startup probe for vss-sync
+        # Faster startup probe for vss-sync
         startupProbe:
           exec:
             command: ["/bin/sh", "-c", "echo 'vss-sync startup'"]
-          initialDelaySeconds: 30
-          periodSeconds: 10
-          timeoutSeconds: 5
+          initialDelaySeconds: 10  # Reduced from 30
+          periodSeconds: 5         # Reduced from 10
+          timeoutSeconds: 2        # Reduced from 5
           failureThreshold: 6
         
-        # Add readiness probe for vss-sync
+        # Faster readiness probe
         readinessProbe:
           exec:
             command: ["/bin/sh", "-c", "test -f /shared/vss.json"]
-          initialDelaySeconds: 45
-          periodSeconds: 15
-          timeoutSeconds: 5
+          initialDelaySeconds: 15  # Reduced from 45
+          periodSeconds: 5         # Reduced from 15
+          timeoutSeconds: 2        # Reduced from 5
           failureThreshold: 3
         
-        # Add liveness probe for vss-sync
+        # Faster liveness probe
         livenessProbe:
           exec:
             command: ["/bin/sh", "-c", "pgrep -f 'vss-sync' || echo 'process check'"]
-          initialDelaySeconds: 60
-          periodSeconds: 30
-          timeoutSeconds: 10
-          failureThreshold: 5
+          initialDelaySeconds: 20  # Reduced from 60
+          periodSeconds: 15        # Reduced from 30
+          timeoutSeconds: 5        # Reduced from 10
+          failureThreshold: 3      # Reduced from 5
         
         command: ["/bin/sh"]
         args:
@@ -199,15 +192,14 @@ spec:
           echo "Starting VSS sync service (offline mode)..."
           
           # Add startup delay for stability
-          sleep 15
+          sleep 3  # Reduced from 15
           
           sync_file() {
             if [ -f /shared/vss.json ]; then
-              # Simple file comparison without external tools
               if ! cmp -s /shared/vss.json /persistent/vss.json 2>/dev/null; then
-                echo "$(date): VSS file changed, syncing to persistent storage"
+                echo "$(date): VSS file changed, syncing"
                 cp /shared/vss.json /persistent/vss.json
-                sync  # Force filesystem sync
+                sync
                 echo "$(date): Sync completed"
               fi
             fi
@@ -217,11 +209,11 @@ spec:
           echo "Performing initial VSS sync..."
           sync_file || echo "Initial sync failed, continuing..."
           
-          # Continuous monitoring with longer intervals for offline efficiency
-          echo "Starting continuous VSS monitoring..."
+          # Continuous monitoring with optimized intervals
+          echo "Starting VSS monitoring (5s intervals)..."
           while true; do
-            sync_file || echo "Sync iteration failed, continuing..."
-            sleep 10  # Check every 10 seconds
+            sync_file || echo "Sync failed, continuing..."
+            sleep 5  # Reduced from 10 for more responsive sync
           done
         
         volumeMounts:
@@ -230,18 +222,19 @@ spec:
         - name: shared-vss
           mountPath: /shared
         
+        # Slightly increased resources for faster sync operations
         resources:
           requests:
             memory: "32Mi"
-            cpu: "25m"
+            cpu: "50m"   # Doubled for faster sync
           limits:
             memory: "64Mi"
-            cpu: "100m"
+            cpu: "200m"  # Doubled limit
       
       volumes:
       - name: persistent-storage
         hostPath:
-          path: /home/developer/.dk/sdv-runtime
+          path: /home/sdv-orin/.dk/sdv-runtime
           type: DirectoryOrCreate
       - name: shared-vss
         emptyDir: {}

@@ -19,7 +19,7 @@ spec:
       terminationGracePeriodSeconds: 30
       volumes:
       - name: dk-home
-        hostPath: { path: /home/developer/.dk }
+        hostPath: { path: /home/sdv-orin/.dk }
       - name: docker-sock
         hostPath: { path: /var/run/docker.sock }
       containers:
@@ -27,9 +27,9 @@ spec:
         image: ghcr.io/eclipse-autowrx/dk_manager:latest
         imagePullPolicy: IfNotPresent  # Never try to pull
         env:
-        - { name: USER, value: "developer" }
+        - { name: USER, value: "sdv-orin" }
         - { name: DOCKER_HUB_NAMESPACE, value: "ghcr.io/eclipse-autowrx" }
-        - { name: ARCH, value: "amd64" }
+        - { name: ARCH, value: "arm64" }
         volumeMounts:
         - { name: dk-home,    mountPath: /app/.dk }
         - { name: docker-sock, mountPath: /var/run/docker.sock }
