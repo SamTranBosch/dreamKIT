@@ -12,11 +12,18 @@ ApplicationWindow {
     flags: Qt.Window | Qt.FramelessWindowHint
     color: "#0F0F0F"
 
-    // Smooth fade-in animation when app starts
+    // Simple fade-in - reduced duration and complexity
     opacity: 0
     
     Component.onCompleted: {
-        fadeInAnimation.start()
+        // Delay to ensure everything is loaded
+        fadeInTimer.start()
+    }
+
+    Timer {
+        id: fadeInTimer
+        interval: 100
+        onTriggered: fadeInAnimation.start()
     }
 
     NumberAnimation {
@@ -25,11 +32,11 @@ ApplicationWindow {
         property: "opacity"
         from: 0
         to: 1
-        duration: 800
+        duration: 400  // Reduced from 800
         easing.type: Easing.OutCubic
     }
 
-    // Background gradient for depth
+    // Static background - no animations
     Rectangle {
         anchors.fill: parent
         gradient: Gradient {
@@ -38,45 +45,18 @@ ApplicationWindow {
         }
     }
 
-    // Subtle animated background pattern
-    Item {
-        id: backgroundPattern
-        anchors.fill: parent
-        opacity: 0.03
-
-        Repeater {
-            model: 20
-            Rectangle {
-                width: 2
-                height: parent.height
-                color: "#00D4AA"
-                x: index * (parent.width / 20)
-                opacity: 0.1
-                
-                SequentialAnimation on opacity {
-                    loops: Animation.Infinite
-                    NumberAnimation { 
-                        to: 0.3
-                        duration: 2000 + (index * 100)
-                    }
-                    NumberAnimation { 
-                        to: 0.1
-                        duration: 2000 + (index * 100)
-                    }
-                }
-            }
-        }
-    }
+    // REMOVED: Animated background pattern - this was causing continuous repaints
+    // The 20 rectangles with infinite animations were a major CPU drain
 
     SwipeView {
         id: swipeView
         anchors.fill: parent
-        interactive: false // Disable swiping to prevent accidental navigation
+        interactive: false
 
-        // Smooth page transitions
+        // Faster transitions
         Behavior on currentIndex {
             NumberAnimation {
-                duration: 400
+                duration: 200  // Reduced from 400
                 easing.type: Easing.OutCubic
             }
         }
@@ -84,49 +64,54 @@ ApplicationWindow {
         Loader {
             id: settingsLoader
             source: "settings.qml"
+            asynchronous: true  // Load asynchronously to prevent blocking
             
-            // Loading animation
+            // Simplified loading indicator
             Rectangle {
                 anchors.centerIn: parent
-                width: 100
-                height: 100
-                radius: 50
-                color: "#00D4AA20"
+                width: 60  // Smaller
+                height: 60
+                radius: 30
+                color: "transparent"
                 border.color: "#00D4AA"
                 border.width: 2
                 visible: settingsLoader.status === Loader.Loading
 
+                // Simpler rotation - no need for complex animation
                 RotationAnimation on rotation {
                     loops: Animation.Infinite
                     from: 0
                     to: 360
-                    duration: 2000
+                    duration: 1000  // Faster rotation
                 }
 
                 Text {
                     anchors.centerIn: parent
-                    text: "dreamKIT"
+                    text: "Loading..."
                     font.family: "Segoe UI"
-                    font.pixelSize: 12
-                    font.weight: Font.Medium
+                    font.pixelSize: 10
                     color: "#00D4AA"
+                }
+            }
+            
+            // Handle loading errors
+            onStatusChanged: {
+                if (status === Loader.Error) {
+                    console.warn("Failed to load settings.qml")
                 }
             }
         }
     }
 
-    // Modern Notification Overlay - MOVE THIS TO THE VERY END OF ApplicationWindow
+    // Optimized Notification Overlay
     Loader {
         id: notificationLoader
         anchors.fill: parent
         source: "qrc:/untitled2/utils/notifications/notificationoverlay.qml"
-        z: 10000 // Ensure it's above everything else
+        z: 10000
+        asynchronous: true  // Load asynchronously
         
         onLoaded: {
-            console.log("[Main] NotificationOverlay loaded successfully")
-            console.log("[Main] Item:", item)
-            console.log("[Main] globalNotificationManager:", globalNotificationManager)
-            
             if (item && globalNotificationManager) {
                 // Configure the notification overlay
                 item.notificationManagerInstance = globalNotificationManager
@@ -135,80 +120,63 @@ ApplicationWindow {
                 item.notificationWidth = 380
                 item.maxVisibleNotifications = 5
                 item.compactMode = false
-                console.log("[Main] NotificationOverlay configured successfully")
                 
-                // Test immediate notification
-                // Qt.callLater(function() {
-                //     console.log("[Main] Testing immediate notification...")
-                //     globalNotificationManager.info("System Ready", "Notification system initialized")
-                // }, 500)
+                console.log("NotificationOverlay configured successfully")
             } else {
-                console.log("[Main] ERROR: Configuration failed")
-                console.log("[Main] item is null:", !item)
-                console.log("[Main] globalNotificationManager is null:", !globalNotificationManager)
+                console.warn("NotificationOverlay configuration failed")
             }
         }
         
         onStatusChanged: {
-            console.log("[Main] NotificationLoader status changed to:", status)
             if (status === Loader.Error) {
-                console.log("[Main] NotificationLoader failed to load")
-                // Try alternative path
+                console.warn("NotificationLoader failed, trying alternative path")
                 source = "qrc:/utils/notifications/notificationoverlay.qml"
-            } else if (status === Loader.Ready && item) {
-                console.log("[Main] NotificationLoader is ready with valid item")
             }
         }
     }
 
-    // Subtle corner accent
+    // Simplified corner accents - static, no canvas repainting
     Rectangle {
-        width: 100
-        height: 100
-        color: "transparent"
+        width: 50  // Smaller
+        height: 2
+        color: "#00D4AA"
         anchors.top: parent.top
         anchors.right: parent.right
-
-        Canvas {
-            anchors.fill: parent
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.clearRect(0, 0, width, height)
-                ctx.strokeStyle = "#00D4AA"
-                ctx.lineWidth = 2
-                ctx.beginPath()
-                ctx.moveTo(width - 50, 0)
-                ctx.lineTo(width, 0)
-                ctx.lineTo(width, 50)
-                ctx.stroke()
-            }
-        }
+        anchors.topMargin: 20
+        anchors.rightMargin: 20
     }
 
     Rectangle {
-        width: 100
-        height: 100
-        color: "transparent"
+        width: 2
+        height: 50
+        color: "#00D4AA"
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: 20
+        anchors.rightMargin: 20
+    }
+
+    Rectangle {
+        width: 50
+        height: 2
+        color: "#00D4AA"
         anchors.bottom: parent.bottom
         anchors.left: parent.left
+        anchors.bottomMargin: 20
+        anchors.leftMargin: 20
+    }
 
-        Canvas {
-            anchors.fill: parent
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.clearRect(0, 0, width, height)
-                ctx.strokeStyle = "#00D4AA"
-                ctx.lineWidth = 2
-                ctx.beginPath()
-                ctx.moveTo(0, height - 50)
-                ctx.lineTo(0, height)
-                ctx.lineTo(50, height)
-                ctx.stroke()
-            }
-        }
+    Rectangle {
+        width: 2
+        height: 50
+        color: "#00D4AA"
+        anchors.bottom: parent.bottom
+        anchors.left: parent.left
+        anchors.bottomMargin: 20
+        anchors.leftMargin: 20
     }
     
-    // Development test button (remove in production)
+    // Development test button - only visible in debug mode
     Rectangle {
         width: 120
         height: 40
