@@ -441,7 +441,7 @@ void InstalledAsyncBase<TI,TD>::performCachedStatusUpdate()
     connect(job, &Async::JobBase::finished, this, [this, job](bool success) {
         if (success) {
             applyStatusUpdatesToUI();
-            NOTIFY_SUCCESS("Service Status", "Service status updated successfully");
+            NOTIFY_SUCCESS("Service Status", "Vehical App/Service page reloaded successfully");
         }
         m_statusUpdateInProgress = false;
         job->deleteLater();
@@ -565,7 +565,7 @@ bool InstalledAsyncBase<TI,TD>::canPerformOperation(const QString &operation) co
         if (m_operationInProgress) {
             QString reason = QString("Service operation in progress: %1 (requested: %2)")
                 .arg(m_currentLocalOperation, operation);
-            NOTIFY_WARNING(operation, reason);
+            NOTIFY_WARNING("Service Status", reason);
             qDebug() << "[InstalledAsyncBase]" << reason;
             return false;
         }
@@ -574,7 +574,7 @@ bool InstalledAsyncBase<TI,TD>::canPerformOperation(const QString &operation) co
     // Then check JobManager state
     if (m_jobManager->isBusy()) {
         QString reason = QString("System busy: %1").arg(m_jobManager->currentOperation());
-        NOTIFY_WARNING(operation, reason);
+        NOTIFY_WARNING("Service Status", reason);
         return false;
     }
     
@@ -709,7 +709,7 @@ void InstalledAsyncBase<TI,TD>::executeServices(
     
     // Try to acquire local operation lock
     if (!tryAcquireLocalOperation(operation)) {
-        NOTIFY_WARNING(operation, "Another service operation is already in progress");
+        NOTIFY_WARNING("Service Status", "Another service operation is already in progress");
         return;
     }
 
@@ -785,7 +785,7 @@ void InstalledAsyncBase<TI,TD>::removeServices(int idx)
     
     // Try to acquire local operation lock
     if (!tryAcquireLocalOperation(operation)) {
-        NOTIFY_WARNING(operation, "Another service operation is already in progress");
+        NOTIFY_WARNING("Service Status", "Another service operation is already in progress");
         return;
     }
 
@@ -828,16 +828,16 @@ void InstalledAsyncBase<TI,TD>::removeServices(int idx)
                         
                     } catch (const std::exception &e) {
                         qWarning() << "[InstalledAsyncBase] DB update failed:" << e.what();
-                        NOTIFY_ERROR("Remove Service", QString("Failed to update database: %1").arg(e.what()));
+                        NOTIFY_ERROR("Removal", QString("Failed to update database: %1").arg(e.what()));
                     }
                 }, Qt::QueuedConnection);
                 
-                NOTIFY_SUCCESS("Remove Service", QString("%1 removed successfully").arg(id));
+                NOTIFY_SUCCESS("Removal", QString("%1 removed successfully").arg(id));
             } else {
-                NOTIFY_ERROR("Remove Service", QString("Failed to remove %1: %2").arg(id, result.errorMessage));
+                NOTIFY_ERROR("Removal", QString("Failed to remove %1: %2").arg(id, result.errorMessage));
             }
         } else {
-            NOTIFY_ERROR("Remove Service", QString("Failed to remove %1: Job execution failed").arg(id));
+            NOTIFY_ERROR("Removal", QString("Failed to remove %1: Job execution failed").arg(id));
         }
         
         // Always release the local operation lock
@@ -853,7 +853,7 @@ void InstalledAsyncBase<TI,TD>::restartSdvRuntime()
     if (m_autoRestartMgr) {
         m_autoRestartMgr->restartSdvRuntime();
     } else {
-        NOTIFY_WARNING("Restart", "Auto-restart manager not available");
+        NOTIFY_WARNING("Restart Service", "Auto-restart manager not available");
     }
 }
 
@@ -863,7 +863,7 @@ void InstalledAsyncBase<TI,TD>::restartApplication()
     if (m_autoRestartMgr) {
         m_autoRestartMgr->restartApplication();
     } else {
-        NOTIFY_WARNING("Restart", "Auto-restart manager not available");
+        NOTIFY_WARNING("Restart Service", "Auto-restart manager not available");
     }
 }
 
@@ -873,7 +873,7 @@ void InstalledAsyncBase<TI,TD>::forceRestartBoth()
     if (m_autoRestartMgr) {
         m_autoRestartMgr->forceRestartBoth();
     } else {
-        NOTIFY_WARNING("Restart", "Auto-restart manager not available");
+        NOTIFY_WARNING("Restart Service", "Auto-restart manager not available");
     }
 }
 
@@ -882,10 +882,10 @@ template<class TI,class TD>
 void InstalledAsyncBase<TI,TD>::onNodeStatusChanged(bool online)
 {
     if (online) {
-        NOTIFY_SUCCESS("Node","VIP (Vehicle Integration Platform) ~ ONLINE");
+        NOTIFY_SUCCESS("ZonalECU","VIP (Vehicle Integration Platform) ~ ONLINE");
         QTimer::singleShot(3000, this, &InstalledAsyncBase::performCachedStatusUpdate);
     } else {
-        NOTIFY_WARNING("Node","VIP (Vehicle Integration Platform) ~ OFFLINE");
+        NOTIFY_WARNING("ZonalECU","VIP (Vehicle Integration Platform) ~ OFFLINE");
         invalidateStatusCache();
     }
     static_cast<TD*>(this)->workerNodeStatusChanged(online);

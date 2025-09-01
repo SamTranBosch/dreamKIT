@@ -444,7 +444,7 @@ JobManager::JobResult JobManager::performDeployment(const DeploymentInfo &info)
             nodeJob->deleteLater();
             
             if (!nodeReady) {
-                NOTIFY_WARNING("Deployment", "Worker node not ready");
+                NOTIFY_WARNING("Deployment", "ZonalECU - VIP is not ready");
             }
             
             // Force cleanup existing
@@ -475,7 +475,7 @@ JobManager::JobResult JobManager::performDeployment(const DeploymentInfo &info)
         const QString message = QString("Service '%1' %2").arg(info.name, action);
         
         if (result.success) {
-            NOTIFY_SUCCESS("Deployment", message);
+            NOTIFY_INFO("Deployment", message);
         } else {
             NOTIFY_ERROR("Deployment", QString("Failed to %1 %2: %3")
                 .arg(action, info.name, result.errorMessage));
@@ -510,7 +510,7 @@ JobManager::JobResult JobManager::performRemoval(const QString &id, const QStrin
             }
         }
         
-        NOTIFY_SUCCESS("Removal", QString("Service %1 removed successfully").arg(id));
+        NOTIFY_INFO("Removal", QString("Service %1 removed successfully").arg(id));
         
     } catch (const std::exception &e) {
         result.success = false;
@@ -565,7 +565,7 @@ JobManager::JobResult JobManager::performInstallation(const InstallationRequest 
         result.errorMessage.clear();
         
         qDebug() << "[JobManager] Installation of" << request.appName << "completed successfully";
-        NOTIFY_SUCCESS("Installation", QString("%1 installed successfully").arg(request.appName));
+        NOTIFY_INFO("Installation", QString("%1 installed successfully").arg(request.appName));
         
     } catch (const std::exception &e) {
         result.success = false;

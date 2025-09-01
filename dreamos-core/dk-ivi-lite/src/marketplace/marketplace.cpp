@@ -239,7 +239,7 @@ QStringList InstallationWorker::buildInstallationCommands(const AppInfo &app, co
     // Node readiness check (lightweight)
     if (manifest.isRemoteNode) {
         emit installationProgress("Checking remote node availability...");
-        commands << QString("kubectl get node vip --no-headers || (echo 'Node vip not ready' && exit 1)");
+        commands << QString("kubectl get node vip --no-headers || (echo 'ZonalECU - VIP is not ready' && exit 1)");
     }
     
     // Mirror job (if remote node)
@@ -536,7 +536,7 @@ void MarketplaceViewModel::onInstallationFailed(const QString &appId, const QStr
 void MarketplaceViewModel::onJobManagerBusy(const QString &reason)
 {
     qDebug() << "[MarketplaceViewModel] JobManager busy:" << reason;
-    NOTIFY_WARNING("System Busy", reason);
+    NOTIFY_WARNING("Installation", QString("System busy: %1").arg(reason));
     
     // If we have a pending installation, cancel it
     if (m_installPending) {
