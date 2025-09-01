@@ -82,41 +82,36 @@ parse_arguments() {
 
 # Show usage information
 show_usage() {
+    echo -e "${CYAN}${BOLD}════════════════════════════════════════════════════════════════════════\n"
     echo -e "${CYAN}${BOLD}dreamOS Installation Suite - Usage Guide${NC}\n"
     
-    echo -e "${WHITE}${BOLD}Basic Usage:${NC}"
-    echo -e "${WHITE}  sudo ./dk_install.sh                    ${DIM}# Full installation with IVI enabled, zonal ECU setup${NC}"
-    echo -e "${WHITE}  sudo ./dk_install.sh dk_ivi=false       ${DIM}# Full installation without IVI interface${NC}"
-    echo -e "${WHITE}  sudo ./dk_install.sh zecu=false         ${DIM}# Skip zonal ECU (S32G) setup${NC}"
-    echo
-    
-    echo -e "${WHITE}${BOLD}Advanced Options:${NC}"
-    echo -e "${WHITE}  sudo ./dk_install.sh zecu=false swupdate=true  ${DIM}# Software update only mode${NC}"
-    echo -e "${WHITE}  sudo ./dk_install.sh dk_ivi=true zecu=true     ${DIM}# Explicit full installation${NC}"
-    echo
-    
     echo -e "${WHITE}${BOLD}Parameters:${NC}"
-    echo -e "${CYAN}  dk_ivi=${BOLD}true|false${NC}     ${DIM}Install IVI interface (default: true)${NC}"
-    echo -e "${CYAN}  zecu=${BOLD}true|false${NC}       ${DIM}Setup zonal ECU (S32G) (default: true)${NC}"
-    echo -e "${CYAN}  swupdate=${BOLD}true|false${NC}    ${DIM}Software update only mode (default: false)${NC}"
+    echo -e "${CYAN}  zecu=${BOLD}true|false${NC}           ${DIM}Setup zonal ECU (S32G) (default: true)${NC}"
+    echo -e "${CYAN}  swupdate=${BOLD}true|false${NC}       ${DIM}Software update only mode (default: false)${NC}"
+    echo -e "${CYAN}  dk_ivi=${BOLD}true|false${NC}         ${DIM}Install IVI interface (default: true)${NC}"
+    echo
+
+    echo -e "${WHITE}${BOLD}Frequently Usage:${NC}"
+    echo -e "${WHITE}  sudo ./dk_install.sh                             ${DIM}# Full installation with IVI enabled, zonal ECU setup${NC}"
+    echo -e "${WHITE}  sudo ./dk_install.sh zecu=false                  ${DIM}# Skip zonal ECU (S32G) setup${NC}"
+    echo -e "${WHITE}  sudo ./dk_install.sh zecu=false swupdate=true    ${DIM}# Software update only mode${NC}"
     echo
     
     echo -e "${WHITE}${BOLD}Software Update Mode:${NC}"
-    echo -e "${DIM}  When swupdate=true, only steps 10-12 are executed:${NC}"
+    echo -e "${CYAN}  When swupdate=true, only steps 10-12 are executed:${NC}"
     echo -e "${DIM}  - Step 10: SDV Runtime update${NC}"
     echo -e "${DIM}  - Step 11: DreamKit Manager update${NC}"
     echo -e "${DIM}  - Step 12: IVI Interface update (if dk_ivi=true)${NC}"
+    echo -e "${CYAN}  Related artifact, example with sdv-runtime):${NC}"
+    echo -e "${DIM}  - manifests/sdv-runtime-pull.yaml                  ${DIM}# Pull to specific version. Will deleted after finish${NC}"
+    echo -e "${DIM}  - manifests/sdv-runtime.yaml                       ${DIM}# Deploy the service.${NC}"
+    echo -e "${CYAN}  In-case user wanna run it manually:${NC}"
+    echo -e "${DIM}  - kubectl delete -f tmp/dk_manifests/parsed_sdv-runtime-pull.yaml --ignore-not-found${NC}"
+    echo -e "${DIM}  - kubectl delete -f tmp/dk_manifests/parsed_sdv-runtime.yaml --ignore-not-found${NC}"
+    echo -e "${DIM}  - kubectl apply -f tmp/dk_manifests/parsed_sdv-runtime-pull.yaml${NC}"
+    echo -e "${DIM}  - kubectl apply -f tmp/dk_manifests/parsed_sdv-runtime.yaml${NC}"
     echo
-    
-    echo -e "${YELLOW}${BOLD}Examples:${NC}"
-    echo -e "${DIM}  # Complete setup for development environment${NC}"
-    echo -e "${WHITE}  sudo ./dk_install.sh${NC}"
-    echo
-    echo -e "${DIM}  # Production setup without IVI and zonal ECU${NC}"
-    echo -e "${WHITE}  sudo ./dk_install.sh dk_ivi=false zecu=false${NC}"
-    echo
-    echo -e "${DIM}  # Update existing installation${NC}"
-    echo -e "${WHITE}  sudo ./dk_install.sh zecu=false swupdate=true${NC}"
+    echo -e "${CYAN}${BOLD}════════════════════════════════════════════════════════════════════════\n"
 }
 
 # Function to show animated banner
