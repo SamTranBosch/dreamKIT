@@ -64,7 +64,6 @@ ApplicationWindow {
         Loader {
             id: settingsLoader
             source: "settings.qml"
-            asynchronous: true  // Load asynchronously to prevent blocking
             
             // Simplified loading indicator
             Rectangle {
