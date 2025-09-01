@@ -21,18 +21,18 @@ qt_add_executable(dk_ivi
     installedservices/installedservices.cpp
     installedservices/installedcheckthread.cpp
     installedvapps/installedvapps.cpp
-    utils/async/asyncjob.cpp
-    utils/core/datamanager.cpp
-    utils/core/fetching.cpp
-    utils/core/jsonstorage.cpp
-    utils/core/appserializer.cpp
-    utils/k3s/manifestbuilder.cpp
-    utils/k3s/installer.cpp
-    utils/k3s/jobmanager.cpp
-    utils/monitor/wlanmonitor.cpp
-    utils/monitor/autorestartmanager.cpp
-    utils/vapiclient/vapiclient.cpp
-    utils/notifications/notificationmanager.cpp
+    platform/async/asyncjob.cpp
+    platform/data/datamanager.cpp
+    platform/data/fetching.cpp
+    platform/data/jsonstorage.cpp
+    platform/data/appserializer.cpp
+    platform/integrations/kubernetes/manifestbuilder.cpp
+    platform/integrations/kubernetes/installer.cpp
+    platform/integrations/kubernetes/jobmanager.cpp
+    platform/integrations/vehicle-api/vapiclient.cpp
+    platform/monitoring/wlanmonitor.cpp
+    platform/monitoring/autorestartmanager.cpp
+    platform/notifications/notificationmanager.cpp
 )
 
 qt_add_qml_module(dk_ivi
@@ -53,7 +53,7 @@ qt_add_qml_module(dk_ivi
         marketplace/SearchBar.qml
         installedservices/installedservices.qml
         installedvapps/installedvapps.qml
-        utils/notifications/notificationoverlay.qml
+        platform/notifications/notificationoverlay.qml
         resource/customwidgets/CustomBtn1.qml
         resource/customwidgets/CustomBtn2.qml
         resource/customwidgets/IconBtn1.qml

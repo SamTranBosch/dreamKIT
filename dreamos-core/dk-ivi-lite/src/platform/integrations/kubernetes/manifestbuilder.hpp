@@ -3,7 +3,7 @@
 //
 // Emits dashboard JSON + deployment / pull / mirror job YAML files.
 //
-#include "../core/datamanager.hpp"
+#include "../../data/datamanager.hpp"
 #include <QString>
 
 namespace K3s {

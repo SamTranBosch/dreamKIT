@@ -7,8 +7,8 @@
 #include "../installedservices/installedservices.hpp"
 #include "../installedvapps/installedvapps.hpp"
 #include "../controls/controls.hpp"
-#include "../utils/vapiclient/vapiclient.hpp"
-#include "../utils/notifications/notificationmanager.hpp"
+#include "../platform/integrations/vehicle-api/vapiclient.hpp"
+#include "../platform/notifications/notificationmanager.hpp"
 
 #include <QCoreApplication>
 #include <QDateTime>

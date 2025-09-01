@@ -1,6 +1,6 @@
 // k3s/manifestbuilder.cpp
 #include "manifestbuilder.hpp"
-#include "../core/jsonstorage.hpp"
+#include "../../data/jsonstorage.hpp"
 #include <QDir>
 #include <QFile>
 #include <QTextStream>

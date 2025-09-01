@@ -4,7 +4,7 @@
 #include <QMetaObject>
 #include <QString>
 
-#include "../utils/vapiclient/vapiclient.hpp"
+#include "../platform/integrations/vehicle-api/vapiclient.hpp"
 
 //------------------------------------------------------------------------------
 // Vehicle API keys

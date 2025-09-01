@@ -6,7 +6,7 @@
 //
 #include <QObject>
 #include <QProcess>
-#include "../async/asyncjob.hpp"
+#include "../../async/asyncjob.hpp"
 
 namespace K3s {
 

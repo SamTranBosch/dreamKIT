@@ -4,7 +4,7 @@
 #include <QCoreApplication>
 #include <QMetaObject>
 #include <QMutexLocker>
-#include "../notifications/notificationmanager.hpp"
+#include "../../notifications/notificationmanager.hpp"
 
 using namespace K3s;
 

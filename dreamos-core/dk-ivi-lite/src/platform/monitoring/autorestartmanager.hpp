@@ -3,8 +3,8 @@
 #include <QTimer>
 #include <QCoreApplication>
 #include <memory>
-#include "../monitor/wlanmonitor.hpp"
-#include "../k3s/jobmanager.hpp"
+#include "../monitoring/wlanmonitor.hpp"
+#include "../integrations/kubernetes/jobmanager.hpp"
 #include "../async/asyncjob.hpp"
 
 /**

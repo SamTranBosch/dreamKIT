@@ -5,7 +5,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QDateTime>
-#include "../core/datamanager.hpp"
+#include "../data/datamanager.hpp"
 #include "../notifications/notificationmanager.hpp"
 
 AutoRestartManager::AutoRestartManager(QObject *parent)

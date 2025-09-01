@@ -7,7 +7,7 @@
 #include <QThread>
 #include <QQueue>
 #include <memory>
-#include "../async/asyncjob.hpp"
+#include "../../async/asyncjob.hpp"
 #include "installer.hpp"
 
 namespace K3s {

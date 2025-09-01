@@ -1,6 +1,6 @@
 // marketplace.cpp - Simplified version using JobManager
 #include "marketplace.hpp"
-#include "../utils/notifications/notificationmanager.hpp"
+#include "../platform/notifications/notificationmanager.hpp"
 
 using namespace Async;
 using K3s::ManifestBuilder;

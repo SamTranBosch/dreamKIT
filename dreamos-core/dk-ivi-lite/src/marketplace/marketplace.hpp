@@ -6,11 +6,11 @@
 #include <QDateTime>
 
 // bring in your existing fetch helpers:
-#include "../utils/async/asyncjob.hpp"
-#include "../utils/core/fetching.hpp"
-#include "../utils/core/datamanager.hpp"
-#include "../utils/k3s/manifestbuilder.hpp"
-#include "../utils/k3s/jobmanager.hpp"
+#include "../platform/async/asyncjob.hpp"
+#include "../platform/data/fetching.hpp"
+#include "../platform/data/datamanager.hpp"
+#include "../platform/integrations/kubernetes/manifestbuilder.hpp"
+#include "../platform/integrations/kubernetes/jobmanager.hpp"
 
 class AppListModel : public QAbstractListModel {
     Q_OBJECT

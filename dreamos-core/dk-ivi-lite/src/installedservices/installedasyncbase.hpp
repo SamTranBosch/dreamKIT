@@ -8,12 +8,12 @@
 #include <QDateTime>
 #include <QMutex>
 
-#include "../utils/async/asyncjob.hpp"
-#include "../utils/core/datamanager.hpp"
-#include "../utils/notifications/notificationmanager.hpp"
-#include "../utils/k3s/jobmanager.hpp"
-#include "../utils/monitor/wlanmonitor.hpp"
-#include "../utils/monitor/autorestartmanager.hpp"
+#include "../platform/async/asyncjob.hpp"
+#include "../platform/data/datamanager.hpp"
+#include "../platform/notifications/notificationmanager.hpp"
+#include "../platform/integrations/kubernetes/jobmanager.hpp"
+#include "../platform/monitoring/wlanmonitor.hpp"
+#include "../platform/monitoring/autorestartmanager.hpp"
 #include "installedcheckthread.hpp"
 
 extern QString DK_CONTAINER_ROOT;

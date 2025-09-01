@@ -106,7 +106,7 @@ ApplicationWindow {
     Loader {
         id: notificationLoader
         anchors.fill: parent
-        source: "qrc:/untitled2/utils/notifications/notificationoverlay.qml"
+        source: "qrc:/untitled2/platform/notifications/notificationoverlay.qml"
         z: 10000
         asynchronous: true  // Load asynchronously
         
@@ -129,7 +129,7 @@ ApplicationWindow {
         onStatusChanged: {
             if (status === Loader.Error) {
                 console.warn("NotificationLoader failed, trying alternative path")
-                source = "qrc:/utils/notifications/notificationoverlay.qml"
+                source = "qrc:/platform/notifications/notificationoverlay.qml"
             }
         }
     }
