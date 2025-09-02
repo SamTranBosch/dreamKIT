@@ -69,7 +69,7 @@ ManifestInfo ManifestBuilder::write(const AppInfo &app)
         
         volumeMountLines << QString(
             "        - name: host-dev\n"
-            "          mountPath: /host-dev\n"
+            "          mountPath: /dev\n"
             "          readOnly: true");
         
         volumeLines << QString(
