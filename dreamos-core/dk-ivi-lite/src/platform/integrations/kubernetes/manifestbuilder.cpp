@@ -70,7 +70,7 @@ ManifestInfo ManifestBuilder::write(const AppInfo &app)
         volumeMountLines << QString(
             "        - name: host-dev\n"
             "          mountPath: /dev\n"
-            "          readOnly: true");
+            "          readOnly: false");
         
         volumeLines << QString(
             "      - name: host-dev\n"
@@ -193,6 +193,8 @@ spec:
       - name: ${name}
         image: ${image}
         imagePullPolicy: IfNotPresent
+        stdin: true
+        tty: true
         
         resources:
           requests:
