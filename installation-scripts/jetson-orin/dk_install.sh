@@ -687,11 +687,6 @@ perform_software_updates() {
         # Switch to IVI namespace
         DOCKER_HUB_NAMESPACE="ghcr.io/samtranbosch"
 
-        # Setup X11 forwarding
-        run_with_feedback "sudo $CURRENT_DIR/scripts/dk_enable_xhost.sh" \
-                            "X11 forwarding enabled" "X11 setup failed" false true
-        run_with_feedback "xhost +local:docker" "Docker X11 access granted" "X11 access failed"
-
         # Pull latest image first
         apply_manifest dk-ivi-pull.yaml
         run_with_feedback \
@@ -836,6 +831,11 @@ main() {
         exit 1
     fi
 
+    # Setup X11 forwarding
+    run_with_feedback "sudo $CURRENT_DIR/scripts/dk_enable_xhost.sh" \
+                        "X11 forwarding enabled" "X11 setup failed" false true
+    run_with_feedback "xhost +local:docker" "Docker X11 access granted" "X11 access failed"
+    
     ###############################################################################
     # Step 7   local Docker registry
     ###############################################################################
