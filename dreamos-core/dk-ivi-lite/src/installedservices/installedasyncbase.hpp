@@ -1,4 +1,3 @@
-// Updated InstalledAsyncBase to use JobManager as central orchestrator
 #pragma once
 #include <QObject>
 #include <QTimer>
@@ -7,6 +6,7 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QMutex>
+#include <QStandardPaths>
 
 #include "../platform/async/asyncjob.hpp"
 #include "../platform/data/datamanager.hpp"
@@ -60,6 +60,9 @@ protected:
     /* subclasses return true if they want auto-restart functionality */
     virtual bool wantsAutoRestart() const { return false; }
 
+    /* subclasses return true if they want VSS model monitoring */
+    virtual bool wantsVSSModelMonitor() const { return false; }
+
     /* helper used by InstalledCheckThread */
     void fileChanged(const QString&);
 
@@ -78,6 +81,9 @@ private slots:
     // Optimized file monitoring slots
     void onFileHashChanged();
     void performCachedStatusUpdate();
+    
+    // VSS model monitoring slots
+    void onVSSModelHashChanged();
 
 private:
     // Enhanced deployment status structure
@@ -108,6 +114,11 @@ private:
     // Optimized file monitoring with MD5
     void initializeFileMonitoring();
     QString calculateFileHash(const QString &filePath);
+    
+    // VSS model monitoring methods
+    void initializeVSSModelMonitoring();
+    QString getVSSModelPath() const;
+    void handleVSSModelChange();
     
     // Enhanced status caching system
     void initializeStatusCaching();
@@ -148,6 +159,11 @@ private:
     QTimer               *m_fileHashTimer   {nullptr};
     bool                  m_isBootup        {true};
     
+    // VSS model monitoring with MD5
+    QString               m_vssModelPath;
+    QString               m_lastVSSModelHash;
+    QTimer               *m_vssModelTimer   {nullptr};
+    
     // Enhanced cached deployment status system
     QHash<QString, DeploymentStatus> m_deploymentStatusCache;
     QMutex                m_cacheMutex;
@@ -155,8 +171,9 @@ private:
     bool                  m_autoStatusUpdatesEnabled {true};
     
     // Configuration
-    static constexpr int FILE_HASH_CHECK_INTERVAL = 3000;    // 3 seconds
-    static constexpr int CACHE_VALIDITY_DURATION = 10000;    // 10 seconds
+    static constexpr int FILE_HASH_CHECK_INTERVAL = 3000;     // 3 seconds
+    static constexpr int VSS_MODEL_CHECK_INTERVAL = 5000;     // 5 seconds
+    static constexpr int CACHE_VALIDITY_DURATION = 10000;     // 10 seconds
     static constexpr int MAX_CONSECUTIVE_FAILURES = 3;
 };
 
@@ -190,6 +207,13 @@ InstalledAsyncBase<TI,TD>::InstalledAsyncBase(QObject *parent)
     connect(m_fileHashTimer, &QTimer::timeout,
             this, &InstalledAsyncBase::onFileHashChanged);
 
+    // Initialize VSS model monitoring timer
+    m_vssModelTimer = new QTimer(this);
+    m_vssModelTimer->setSingleShot(false);
+    m_vssModelTimer->setInterval(VSS_MODEL_CHECK_INTERVAL);
+    connect(m_vssModelTimer, &QTimer::timeout,
+            this, &InstalledAsyncBase::onVSSModelHashChanged);
+
     // Initialize monitoring after the base constructor knows the v-table
     QTimer::singleShot(0, this, [this](){
         initializeMonitoring();
@@ -213,7 +237,13 @@ void InstalledAsyncBase<TI,TD>::initializeMonitoring()
     // 2) Initialize status caching system
     initializeStatusCaching();
 
-    // 3) WLAN monitoring (if requested) - simplified
+    // 3) Initialize VSS model monitoring (if requested)
+    if (wantsVSSModelMonitor()) {
+        initializeVSSModelMonitoring();
+        qDebug() << "[InstalledAsyncBase] VSS model monitoring enabled";
+    }
+
+    // 4) WLAN monitoring (if requested) - simplified
     if (wantsWlanMonitor()) {
         m_wlanMonitor = new WlanMonitor(this);
         m_wlanMonitor->setCheckInterval(30000); // 30 seconds
@@ -224,7 +254,7 @@ void InstalledAsyncBase<TI,TD>::initializeMonitoring()
         qDebug() << "[InstalledAsyncBase] WLAN monitoring enabled";
     }
 
-    // 4) Auto-restart functionality (if requested)
+    // 5) Auto-restart functionality (if requested)
     if (wantsAutoRestart()) {
         m_autoRestartMgr = new AutoRestartManager(this);
         m_autoRestartMgr->setWlanMonitor(m_wlanMonitor);
@@ -233,7 +263,7 @@ void InstalledAsyncBase<TI,TD>::initializeMonitoring()
         qDebug() << "[InstalledAsyncBase] Auto-restart functionality enabled";
     }
 
-    // 5) Node monitoring (if requested) - using JobManager
+    // 6) Node monitoring (if requested) - using JobManager
     if (wantsNodeMonitor()) {
         auto *nodeTimer = new QTimer(this);
         nodeTimer->setSingleShot(false);
@@ -303,6 +333,138 @@ void InstalledAsyncBase<TI,TD>::initializeFileMonitoring()
             static_cast<TD*>(this), &TD::handleResults,
             Qt::QueuedConnection);
     m_checkThread->start();
+}
+
+/* ------------ Initialize VSS model monitoring with MD5 -- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::initializeVSSModelMonitoring()
+{
+    m_vssModelPath = getVSSModelPath();
+    
+    qDebug() << "[InstalledAsyncBase] Initializing VSS model monitoring:" << m_vssModelPath;
+    
+    // Calculate initial hash
+    m_lastVSSModelHash = calculateFileHash(m_vssModelPath);
+    
+    // Start VSS model hash checking timer with a delay to allow system to settle
+    QTimer::singleShot(5000, this, [this]() {
+        if (m_vssModelTimer) {
+            m_vssModelTimer->start();
+            qDebug() << "[InstalledAsyncBase] VSS model monitoring timer started after 5s delay";
+        }
+    });
+    
+    // Initial notification if file exists
+    if (!m_lastVSSModelHash.isEmpty()) {
+        NOTIFY_INFO("VSS Model", "VSS model monitoring started - watching for changes");
+    }
+}
+
+/* ------------ Get VSS model file path ------------------- */
+template<class TI,class TD>
+QString InstalledAsyncBase<TI,TD>::getVSSModelPath() const
+{
+    // Check if we're running in a container (DK_CONTAINER_ROOT is set)
+    if (!DK_CONTAINER_ROOT.isEmpty()) {
+        // Container environment - use mounted path
+        QString containerPath = DK_CONTAINER_ROOT + "sdv-runtime/vss.json";
+        qDebug() << "[InstalledAsyncBase] Container VSS model path:" << containerPath;
+        return containerPath;
+    }
+    
+    // Check environment variable override
+    QString envPath = qEnvironmentVariable("VSS_MODEL_PATH");
+    if (!envPath.isEmpty()) {
+        qDebug() << "[InstalledAsyncBase] Using VSS_MODEL_PATH:" << envPath;
+        return envPath;
+    }
+    
+    // Fallback to home directory (for native/development execution)
+    QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+    QString fallbackPath = homePath + "/.dk/sdv-runtime/vss.json";
+    qDebug() << "[InstalledAsyncBase] Using fallback VSS model path:" << fallbackPath;
+    return fallbackPath;
+}
+
+/* ------------ VSS model hash change handler ------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::onVSSModelHashChanged()
+{
+    QString currentHash = calculateFileHash(m_vssModelPath);
+    
+    // Check if file was created (from non-existent to existing)
+    if (m_lastVSSModelHash.isEmpty() && !currentHash.isEmpty()) {
+        m_lastVSSModelHash = currentHash;
+        qDebug() << "[InstalledAsyncBase] VSS model file created:" << m_vssModelPath;
+        NOTIFY_INFO("VSS Model", "VSS model file detected and monitoring started");
+        return;
+    }
+    
+    // Check if file was deleted (from existing to non-existent)
+    if (!m_lastVSSModelHash.isEmpty() && currentHash.isEmpty()) {
+        m_lastVSSModelHash = currentHash;
+        qDebug() << "[InstalledAsyncBase] VSS model file deleted:" << m_vssModelPath;
+        NOTIFY_INFO("VSS Model", "VSS model file removed - monitoring continues");
+        return;
+    }
+    
+    // Check for changes during runtime (both hashes non-empty and different)
+    if (!currentHash.isEmpty() && currentHash != m_lastVSSModelHash) {
+        qDebug() << "[InstalledAsyncBase] VSS model file changed - triggering handler";
+        
+        m_lastVSSModelHash = currentHash;
+        handleVSSModelChange();
+    }
+}
+
+/* ------------ Handle VSS model change ------------------- */
+template<class TI,class TD>
+void InstalledAsyncBase<TI,TD>::handleVSSModelChange()
+{
+    qDebug() << "[InstalledAsyncBase] Processing VSS model change";
+    
+    // Delay the processing slightly to ensure file write is complete
+    QTimer::singleShot(1000, this, [this]() {
+        try {
+            // Read and validate the VSS model file
+            QFile vssFile(m_vssModelPath);
+            if (!vssFile.exists()) {
+                NOTIFY_INFO("VSS Model", "VSS model file was removed");
+                return;
+            }
+            
+            if (!vssFile.open(QIODevice::ReadOnly)) {
+                qWarning() << "[InstalledAsyncBase] Failed to open VSS model file:" << m_vssModelPath;
+                NOTIFY_INFO("VSS Model", "VSS model file changed but could not be read");
+                return;
+            }
+            
+            // Try to parse as JSON to validate format
+            QByteArray jsonData = vssFile.readAll();
+            vssFile.close();
+            
+            QJsonParseError parseError;
+            QJsonDocument doc = QJsonDocument::fromJson(jsonData, &parseError);
+            
+            if (parseError.error != QJsonParseError::NoError) {
+                qWarning() << "[InstalledAsyncBase] Invalid JSON in VSS model file:" << parseError.errorString();
+                NOTIFY_INFO("VSS Model", "VSS model file updated but contains invalid JSON");
+                return;
+            }
+            
+            // Successfully parsed - notify about the change
+            QDateTime now = QDateTime::currentDateTime();
+            QString timestamp = now.toString("hh:mm:ss");
+            
+            NOTIFY_INFO("VSS Model", QString("VSS model updated successfully at %1").arg(timestamp));
+            
+            qDebug() << "[InstalledAsyncBase] VSS model file processed successfully";
+            
+        } catch (const std::exception &e) {
+            qWarning() << "[InstalledAsyncBase] Exception handling VSS model change:" << e.what();
+            NOTIFY_INFO("VSS Model", "VSS model change detected but processing failed");
+        }
+    });
 }
 
 /* ------------ Initialize status caching system -------------- */
@@ -612,6 +774,11 @@ void InstalledAsyncBase<TI,TD>::cleanupMonitoring()
 {
     if (m_fileHashTimer) {
         m_fileHashTimer->stop();
+    }
+    
+    // Cleanup VSS model monitoring
+    if (m_vssModelTimer) {
+        m_vssModelTimer->stop();
     }
     
     if (m_wlanMonitor) {

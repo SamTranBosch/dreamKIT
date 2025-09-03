@@ -50,10 +50,13 @@ public slots:
     { emit updateStartAppMsg(id,ok,msg); }
 
 protected:
-    /* specific for VsersAsync, to monitor status of worker node */
+    /* specific for VsersAsync, to monitor various system components */
     bool wantsNodeMonitor() const override { return true; }
     bool wantsWlanMonitor() const override { return true; }
     bool wantsAutoRestart() const override { return true; }
+    
+    /* Enable VSS model monitoring for this class */
+    bool wantsVSSModelMonitor() const override { return true; }
 
     void appendItemToQml(const VsersListStruct &it) override
     { emit appendServicesInfoToServicesList(it.name,it.author,it.rating,

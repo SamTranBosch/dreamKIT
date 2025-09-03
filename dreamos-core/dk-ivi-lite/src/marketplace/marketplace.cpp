@@ -271,7 +271,7 @@ QStringList InstallationWorker::buildInstallationCommands(const AppInfo &app, co
     if (!manifest.pullJobYaml.isEmpty()) {
         emit installationProgress("Pulling container image...");
         commands << QString("kubectl apply -f %1").arg(manifest.pullJobYaml);
-        commands << "sleep 20";  // Initial wait for job to start
+        commands << "sleep 25";  // Initial wait for job to start
         
         // Check pull job status before long wait
         commands << QString(R"(
