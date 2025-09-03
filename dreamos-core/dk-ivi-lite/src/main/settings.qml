@@ -151,7 +151,7 @@ Rectangle {
 
         Text {
             id: settings_page_header_text
-            text: "dreamKIT v1.9"
+            text: "dreamKIT v1.10"
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             font.bold: true

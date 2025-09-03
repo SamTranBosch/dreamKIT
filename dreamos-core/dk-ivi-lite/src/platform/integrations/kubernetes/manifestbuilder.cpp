@@ -207,10 +207,7 @@ ${env}
 ${args_section}
         
         securityContext:
-          privileged: false
-          readOnlyRootFilesystem: false
-          runAsNonRoot: false
-          allowPrivilegeEscalation: false
+          privileged: true
         
 ${volume_mounts_section}
       
