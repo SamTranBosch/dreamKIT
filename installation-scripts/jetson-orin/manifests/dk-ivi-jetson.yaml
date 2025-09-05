@@ -73,6 +73,7 @@ spec:
       nodeSelector:
         kubernetes.io/hostname: xip
       hostNetwork: true
+      hostPID: true        # Required for nsenter to access host processes
       restartPolicy: Always
       terminationGracePeriodSeconds: 30  # Reduced from 60 for faster cleanup
       
@@ -131,7 +132,12 @@ spec:
           echo "=== Init completed ==="
         
         securityContext:
-          privileged: true  # Required for nsenter
+          privileged: true     # Required for nsenter and full access
+          runAsUser: 0
+          capabilities:
+            add:
+            - SYS_ADMIN       # Required for namespace operations
+            - SYS_PTRACE      # Required for process tracing
         
         volumeMounts:
         - name: offline-tools
@@ -142,6 +148,9 @@ spec:
           readOnly: true
         - name: kube-config
           mountPath: /root/.kube/config
+          readOnly: true
+        - name: proc
+          mountPath: /host/proc
           readOnly: true
         
         # Increased resources for faster init
