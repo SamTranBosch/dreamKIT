@@ -959,13 +959,7 @@ void InstalledAsyncBase<TI,TD>::removeServices(int idx)
     const QString yaml = deploymentYaml(id);
     qDebug() << "[InstalledAsyncBase] Removing service:" << id;
 
-    // Remove from status cache immediately
-    {
-        QMutexLocker locker(&m_cacheMutex);
-        m_deploymentStatusCache.remove(id);
-    }
-
-    // Use JobManager for removal instead of creating a custom chain
+    // Use JobManager for removal
     auto *job = m_jobManager->removeService(id, yaml);
     
     connect(job, &Async::JobBase::finished, this, [this, idx, id, job, operation](bool success) {
@@ -976,8 +970,8 @@ void InstalledAsyncBase<TI,TD>::removeServices(int idx)
             removalSuccess = result.success;
             
             if (removalSuccess) {
-                // Update database in main thread
-                QMetaObject::invokeMethod(this, [this, id]() {
+                // Update database synchronously in a separate thread to avoid blocking
+                auto *dbUpdateJob = new Async::Job<bool>([this, id]() -> bool {
                     try {
                         DataManager dm;
                         QJsonArray in = dm.load(dbKey()), out;
@@ -987,28 +981,47 @@ void InstalledAsyncBase<TI,TD>::removeServices(int idx)
                             }
                         }
                         dm.save(dbKey(), out);
+                        return true;
+                    } catch (const std::exception &e) {
+                        qWarning() << "[InstalledAsyncBase] DB update failed:" << e.what();
+                        return false;
+                    }
+                }, this);
+                
+                connect(dbUpdateJob, &Async::JobBase::finished, this, [this, id, dbUpdateJob, operation](bool dbSuccess) {
+                    if (dbSuccess) {
+                        // Remove from status cache after successful DB update
+                        {
+                            QMutexLocker locker(&m_cacheMutex);
+                            m_deploymentStatusCache.remove(id);
+                        }
                         
-                        // Update local list and refresh UI
-                        QTimer::singleShot(100, this, [this]() {
+                        // Update UI after successful database update
+                        QTimer::singleShot(50, this, [this]() {
                             initInstalledFromDB();
                         });
                         
-                    } catch (const std::exception &e) {
-                        qWarning() << "[InstalledAsyncBase] DB update failed:" << e.what();
-                        NOTIFY_ERROR("Removal", QString("Failed to update database: %1").arg(e.what()));
+                        NOTIFY_SUCCESS("Removal", QString("%1 removed successfully").arg(id));
+                    } else {
+                        NOTIFY_ERROR("Removal", QString("Failed to update database for %1").arg(id));
                     }
-                }, Qt::QueuedConnection);
+                    
+                    // CRITICAL: Release operation lock only after everything is complete
+                    releaseLocalOperation();
+                    dbUpdateJob->deleteLater();
+                });
                 
-                NOTIFY_SUCCESS("Removal", QString("%1 removed successfully").arg(id));
             } else {
                 NOTIFY_ERROR("Removal", QString("Failed to remove %1: %2").arg(id, result.errorMessage));
+                // Release lock immediately on failure
+                releaseLocalOperation();
             }
         } else {
             NOTIFY_ERROR("Removal", QString("Failed to remove %1: Job execution failed").arg(id));
+            // Release lock immediately on failure
+            releaseLocalOperation();
         }
         
-        // Always release the local operation lock
-        releaseLocalOperation();
         job->deleteLater();
     });
 }
