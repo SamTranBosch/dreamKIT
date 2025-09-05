@@ -149,9 +149,6 @@ spec:
         - name: kube-config
           mountPath: /root/.kube/config
           readOnly: true
-        - name: proc
-          mountPath: /host/proc
-          readOnly: true
         
         # Increased resources for faster init
         resources:
