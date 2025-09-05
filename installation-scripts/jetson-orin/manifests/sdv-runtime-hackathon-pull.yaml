@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sdv-runtime-pull
+  name: sdv-runtime-hackathon-pull
 spec:
   # Add backoff limit to prevent infinite retries
   backoffLimit: 3
@@ -14,7 +14,7 @@ spec:
         kubernetes.io/hostname: xip
       restartPolicy: Never
       containers:
-      - name: sdv-runtime-pull
+      - name: sdv-runtime-hackathon-pull
         image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:dc1f218806aa00e1a99df23c7e2ed387b0c6da70
         imagePullPolicy: Always
         command: ["true"]

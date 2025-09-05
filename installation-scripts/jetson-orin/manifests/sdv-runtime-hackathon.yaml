@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: sdv-runtime
+  name: sdv-runtime-hackathon
   namespace: default
   annotations:
     deployment.kubernetes.io/revision: "1"
@@ -14,11 +14,11 @@ spec:
       maxSurge: 0
   selector:
     matchLabels:
-      app: sdv-runtime
+      app: sdv-runtime-hackathon
   template:
     metadata:
       labels:
-        app: sdv-runtime
+        app: sdv-runtime-hackathon
       annotations:
         restart-timestamp: "{{ .Values.timestamp | default now }}"
         pod.kubernetes.io/sandbox-cleanup: "force"
@@ -49,7 +49,7 @@ spec:
       
       # Enhanced init container with sandbox cleanup awareness
       initContainers:
-      - name: setup-vss
+      - name: setup-vss-hackathon
         image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:dc1f218806aa00e1a99df23c7e2ed387b0c6da70
         imagePullPolicy: IfNotPresent
         command: ["/bin/sh"]
@@ -57,184 +57,187 @@ spec:
         - -c
         - |
           set -e
-          echo "Starting VSS initialization with sandbox cleanup awareness..."
+          echo "Starting VSS initialization for hackathon runtime..."
           
           # Add delay to prevent rapid restart loops and allow cleanup
           echo "Brief system stabilization..."
-          sleep 5  # Reduced from 20
+          sleep 5
           
-          echo "Initializing VSS file (offline mode)..."
+          echo "Initializing VSS file for hackathon (offline mode)..."
           mkdir -p /persistent /shared
           
-          # Parallel operations where possible
-          if [ -f /persistent/vss.json ]; then
-            echo "Loading existing VSS file"
-            cp /persistent/vss.json /shared/vss.json &
+          # Use separate directory for hackathon runtime
+          if [ -f /persistent/vss-hackathon.json ]; then
+            echo "Loading existing hackathon VSS file"
+            cp /persistent/vss-hackathon.json /shared/vss-hackathon.json &
+          elif [ -f /persistent/vss.json ]; then
+            echo "Copying default VSS file for hackathon"
+            cp /persistent/vss.json /shared/vss-hackathon.json &
           fi
           
           wait  # Wait for background copy
-          chmod 666 /shared/vss.json
+          chmod 666 /shared/vss-hackathon.json
           
           # Minimal final check
-          sleep 2  # Reduced from 5
-          echo "VSS initialization complete"
+          sleep 2
+          echo "VSS initialization complete for hackathon"
         
         resources:
           requests:
             memory: "32Mi"
-            cpu: "50m"  # Slightly increased for faster processing
+            cpu: "50m"
           limits:
             memory: "64Mi"
-            cpu: "200m"  # Increased limit for init speed
+            cpu: "200m"
         
         volumeMounts:
         - name: persistent-storage
           mountPath: /persistent
-        - name: shared-vss
+        - name: shared-vss-hackathon
           mountPath: /shared
       
       containers:
-      - name: sdv-runtime
+      - name: sdv-runtime-hackathon
         image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:dc1f218806aa00e1a99df23c7e2ed387b0c6da70
         imagePullPolicy: IfNotPresent
         
-        # Faster startup probe with more aggressive timing
+        # No startup probe for TCP since we're not hosting on 55555
         startupProbe:
-          tcpSocket:
-            port: 55555
-          initialDelaySeconds: 20  # Reduced from 45
-          periodSeconds: 5         # Reduced from 10
-          timeoutSeconds: 3        # Reduced from 5
-          failureThreshold: 15     # Increased to maintain total time but check faster
+          exec:
+            command: ["/bin/sh", "-c", "pgrep -f 'sdv-runtime' || echo 'process check'"]
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 15
         
-        # Faster readiness probe
+        # Process-based readiness probe instead of TCP
         readinessProbe:
-          tcpSocket:
-            port: 55555
-          initialDelaySeconds: 25  # Reduced from 60
-          periodSeconds: 5         # Reduced from 15
-          timeoutSeconds: 3        # Reduced from 10
+          exec:
+            command: ["/bin/sh", "-c", "pgrep -f 'sdv-runtime' && test -f /home/dev/ws/vss.json"]
+          initialDelaySeconds: 25
+          periodSeconds: 5
+          timeoutSeconds: 3
           failureThreshold: 3
         
-        # Optimized liveness probe
+        # Process-based liveness probe
         livenessProbe:
-          tcpSocket:
-            port: 55555
-          initialDelaySeconds: 35  # Reduced from 90
-          periodSeconds: 15        # Reduced from 30
-          timeoutSeconds: 5        # Reduced from 15
-          failureThreshold: 3      # Reduced from 5 for faster detection
+          exec:
+            command: ["/bin/sh", "-c", "pgrep -f 'sdv-runtime' || echo 'process check'"]
+          initialDelaySeconds: 35
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 3
         
         # Increased resource requests for faster startup
         resources:
           requests:
             memory: "128Mi"
-            cpu: "200m"  # Doubled for faster startup
+            cpu: "200m"
           limits:
             memory: "512Mi"
-            cpu: "1000m"  # Increased limit for peak performance
+            cpu: "1000m"
         
         env:
         - name: USER
           value: "${DK_USER}"
         - name: RUNTIME_NAME
-          value: "${RUNTIME_NAME}"
+          value: "IAA-Hackathon"
         - name: ARCH
           value: "${ARCH}"
         - name: OFFLINE_MODE
           value: "true"
+        - name: DISABLE_DATABROKER
+          value: "True"
         
-        ports:
-        - containerPort: 55555
-          hostPort: 55555
+        # No port configuration since we're not hosting
         
         volumeMounts:
-        - name: shared-vss
+        - name: shared-vss-hackathon
           mountPath: /home/dev/ws/vss.json
-          subPath: vss.json
+          subPath: vss-hackathon.json
       
-      - name: vss-sync
+      - name: vss-sync-hackathon
         image: ${DOCKER_HUB_NAMESPACE}/sdv-runtime:dc1f218806aa00e1a99df23c7e2ed387b0c6da70
         imagePullPolicy: IfNotPresent
         
         # Faster startup probe for vss-sync
         startupProbe:
           exec:
-            command: ["/bin/sh", "-c", "echo 'vss-sync startup'"]
-          initialDelaySeconds: 10  # Reduced from 30
-          periodSeconds: 5         # Reduced from 10
-          timeoutSeconds: 2        # Reduced from 5
+            command: ["/bin/sh", "-c", "echo 'vss-sync-hackathon startup'"]
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 2
           failureThreshold: 6
         
         # Faster readiness probe
         readinessProbe:
           exec:
-            command: ["/bin/sh", "-c", "test -f /shared/vss.json"]
-          initialDelaySeconds: 15  # Reduced from 45
-          periodSeconds: 5         # Reduced from 15
-          timeoutSeconds: 2        # Reduced from 5
+            command: ["/bin/sh", "-c", "test -f /shared/vss-hackathon.json"]
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          timeoutSeconds: 2
           failureThreshold: 3
         
         # Faster liveness probe
         livenessProbe:
           exec:
-            command: ["/bin/sh", "-c", "pgrep -f 'vss-sync' || echo 'process check'"]
-          initialDelaySeconds: 20  # Reduced from 60
-          periodSeconds: 15        # Reduced from 30
-          timeoutSeconds: 5        # Reduced from 10
-          failureThreshold: 3      # Reduced from 5
+            command: ["/bin/sh", "-c", "pgrep -f 'vss-sync-hackathon' || echo 'process check'"]
+          initialDelaySeconds: 20
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 3
         
         command: ["/bin/sh"]
         args:
         - -c
         - |
           set -e
-          echo "Starting VSS sync service (offline mode)..."
+          echo "Starting VSS sync service for hackathon (offline mode)..."
           
           # Add startup delay for stability
-          sleep 3  # Reduced from 15
+          sleep 3
           
           sync_file() {
-            if [ -f /shared/vss.json ]; then
-              if ! cmp -s /shared/vss.json /persistent/vss.json 2>/dev/null; then
-                echo "$(date): VSS file changed, syncing"
-                cp /shared/vss.json /persistent/vss.json
+            if [ -f /shared/vss-hackathon.json ]; then
+              if ! cmp -s /shared/vss-hackathon.json /persistent/vss-hackathon.json 2>/dev/null; then
+                echo "$(date): Hackathon VSS file changed, syncing"
+                cp /shared/vss-hackathon.json /persistent/vss-hackathon.json
                 sync
-                echo "$(date): Sync completed"
+                echo "$(date): Hackathon sync completed"
               fi
             fi
           }
           
           # Initial sync with error handling
-          echo "Performing initial VSS sync..."
-          sync_file || echo "Initial sync failed, continuing..."
+          echo "Performing initial VSS sync for hackathon..."
+          sync_file || echo "Initial hackathon sync failed, continuing..."
           
           # Continuous monitoring with optimized intervals
-          echo "Starting VSS monitoring (5s intervals)..."
+          echo "Starting VSS monitoring for hackathon (5s intervals)..."
           while true; do
-            sync_file || echo "Sync failed, continuing..."
-            sleep 5  # Reduced from 10 for more responsive sync
+            sync_file || echo "Hackathon sync failed, continuing..."
+            sleep 5
           done
         
         volumeMounts:
         - name: persistent-storage
           mountPath: /persistent
-        - name: shared-vss
+        - name: shared-vss-hackathon
           mountPath: /shared
         
         # Slightly increased resources for faster sync operations
         resources:
           requests:
             memory: "32Mi"
-            cpu: "50m"   # Doubled for faster sync
+            cpu: "50m"
           limits:
             memory: "64Mi"
-            cpu: "200m"  # Doubled limit
+            cpu: "200m"
       
       volumes:
       - name: persistent-storage
         hostPath:
           path: /home/${DK_USER}/.dk/sdv-runtime
           type: DirectoryOrCreate
-      - name: shared-vss
+      - name: shared-vss-hackathon
         emptyDir: {}

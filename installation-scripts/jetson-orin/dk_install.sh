@@ -35,6 +35,7 @@ parse_arguments() {
     dk_ivi_value="true"        # Changed default to true
     zecu_value="true"          # Default enable zonal ECU setup
     swupdate_value="false"     # Default disable software update only mode
+    hackathon_value="false"    # Default disable hackathon deployment
     
     # Parse all arguments
     for arg in "$@"; do
@@ -47,6 +48,9 @@ parse_arguments() {
                 ;;
             swupdate=*)
                 swupdate_value="${arg#*=}"
+                ;;
+            hackathon=*)
+                hackathon_value="${arg#*=}"
                 ;;
         esac
     done
@@ -76,11 +80,19 @@ parse_arguments() {
             ;;
     esac
     
+    case "$hackathon_value" in
+        true|false) ;;
+        *) 
+            show_error "Invalid hackathon value: $hackathon_value (must be true or false)"
+            exit 1
+            ;;
+    esac
+    
     # Export for use in other functions
-    export dk_ivi_value zecu_value swupdate_value
+    export dk_ivi_value zecu_value swupdate_value hackathon_value
 }
 
-# Show usage information
+# Update show_usage function to include hackathon parameter
 show_usage() {
     echo -e "${CYAN}${BOLD}════════════════════════════════════════════════════════════════════════\n"
     echo -e "${CYAN}${BOLD}dreamOS Installation Suite - Usage Guide${NC}\n"
@@ -89,12 +101,23 @@ show_usage() {
     echo -e "${CYAN}  zecu=${BOLD}true|false${NC}           ${DIM}Setup zonal ECU (S32G) (default: true)${NC}"
     echo -e "${CYAN}  swupdate=${BOLD}true|false${NC}       ${DIM}Software update only mode (default: false)${NC}"
     echo -e "${CYAN}  dk_ivi=${BOLD}true|false${NC}         ${DIM}Install IVI interface (default: true)${NC}"
+    echo -e "${CYAN}  hackathon=${BOLD}true|false${NC}      ${DIM}Deploy hackathon SDV runtime (default: false)${NC}"
     echo
 
     echo -e "${WHITE}${BOLD}Frequently Usage:${NC}"
-    echo -e "${WHITE}  sudo ./dk_install.sh                             ${DIM}# Full installation with IVI enabled, zonal ECU setup${NC}"
-    echo -e "${WHITE}  sudo ./dk_install.sh zecu=false                  ${DIM}# Skip zonal ECU (S32G) setup${NC}"
-    echo -e "${WHITE}  sudo ./dk_install.sh zecu=false swupdate=true    ${DIM}# Software update only mode${NC}"
+    echo -e "${WHITE}  sudo ./dk_install.sh                                    ${DIM}# Full installation with IVI enabled, zonal ECU setup${NC}"
+    echo -e "${WHITE}  sudo ./dk_install.sh zecu=false                         ${DIM}# Skip zonal ECU (S32G) setup${NC}"
+    echo -e "${WHITE}  sudo ./dk_install.sh hackathon=true                     ${DIM}# Include hackathon SDV runtime deployment${NC}"
+    echo -e "${WHITE}  sudo ./dk_install.sh zecu=false swupdate=true           ${DIM}# Software update only mode${NC}"
+    echo -e "${WHITE}  sudo ./dk_install.sh hackathon=true swupdate=true       ${DIM}# Update including hackathon runtime${NC}"
+    echo
+    
+    echo -e "${WHITE}${BOLD}Hackathon Mode:${NC}"
+    echo -e "${CYAN}  When hackathon=true, deploys additional SDV runtime with:${NC}"
+    echo -e "${DIM}  - RUNTIME_NAME: IAA-Hackathon${NC}"
+    echo -e "${DIM}  - DISABLE_DATABROKER: True${NC}"
+    echo -e "${DIM}  - No port 55555 hosting (main runtime keeps the port)${NC}"
+    echo -e "${DIM}  - Separate VSS file management${NC}"
     echo
     
     echo -e "${WHITE}${BOLD}Software Update Mode:${NC}"
@@ -102,14 +125,7 @@ show_usage() {
     echo -e "${DIM}  - Step 10: SDV Runtime update${NC}"
     echo -e "${DIM}  - Step 11: DreamKit Manager update${NC}"
     echo -e "${DIM}  - Step 12: IVI Interface update (if dk_ivi=true)${NC}"
-    echo -e "${CYAN}  Related artifact, example with sdv-runtime):${NC}"
-    echo -e "${DIM}  - manifests/sdv-runtime-pull.yaml                  ${DIM}# Pull to specific version. Will deleted after finish${NC}"
-    echo -e "${DIM}  - manifests/sdv-runtime.yaml                       ${DIM}# Deploy the service.${NC}"
-    echo -e "${CYAN}  In-case user wanna run it manually:${NC}"
-    echo -e "${DIM}  - kubectl delete -f tmp/dk_manifests/parsed_sdv-runtime-pull.yaml --ignore-not-found${NC}"
-    echo -e "${DIM}  - kubectl delete -f tmp/dk_manifests/parsed_sdv-runtime.yaml --ignore-not-found${NC}"
-    echo -e "${DIM}  - kubectl apply -f tmp/dk_manifests/parsed_sdv-runtime-pull.yaml${NC}"
-    echo -e "${DIM}  - kubectl apply -f tmp/dk_manifests/parsed_sdv-runtime.yaml${NC}"
+    echo -e "${DIM}  - Step 10b: Hackathon SDV Runtime update (if hackathon=true)${NC}"
     echo
     echo -e "${CYAN}${BOLD}════════════════════════════════════════════════════════════════════════\n"
 }
@@ -139,6 +155,7 @@ EOF
     echo -e "${DIM}  IVI Interface: ${BOLD}$dk_ivi_value${NC}"
     echo -e "${DIM}  Zonal ECU Setup: ${BOLD}$zecu_value${NC}"
     echo -e "${DIM}  Software Update Only: ${BOLD}$swupdate_value${NC}"
+    echo -e "${DIM}  Hackathon Runtime: ${BOLD}$hackathon_value${NC}"
     
     # Animated subtitle
     local subtitle="Initializing dreamOS installation environment..."
@@ -574,7 +591,7 @@ perform_software_updates() {
     local update_mode=${2:-"update"}  # "update" or "install" mode
     
     ###############################################################################
-    # Step 10   SDV Runtime
+    # Step 10   SDV Runtime (Main)
     ###############################################################################
     local step_num=$((10 - step_offset))
     if [[ "$update_mode" == "update" ]]; then
@@ -601,7 +618,7 @@ perform_software_updates() {
     fi
 
     # Enhanced SDV Runtime deployment with improved pull strategy
-    show_info "Deploying SDV Runtime with force update..."
+    show_info "Deploying main SDV Runtime with force update..."
 
     # Pull latest image first with retry logic
     apply_manifest sdv-runtime-pull.yaml
@@ -644,6 +661,82 @@ perform_software_updates() {
 
     # Apply with force update
     apply_manifest_with_force_update "sdv-runtime.yaml" "sdv-runtime" "${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest"
+
+    ###############################################################################
+    # Step 10b   SDV Runtime (Hackathon) - conditional
+    ###############################################################################
+    if [[ "$hackathon_value" == "true" ]]; then
+        if [[ "$update_mode" == "update" ]]; then
+            show_info "Hackathon SDV Runtime Update" "Updating hackathon runtime environment"
+        else
+            show_info "Hackathon SDV Runtime" "Setting up hackathon runtime environment"
+        fi
+
+        # Enhanced VSS setup with existence check for hackathon runtime
+        if [[ "$update_mode" == "install" ]]; then
+            show_info "Setting up hackathon VSS configuration..."
+            # Create hackathon-specific VSS file from default if it doesn't exist
+            if [ ! -f "${HOME_DIR}/.dk/sdv-runtime/vss-hackathon.json" ]; then
+                if [ -f "${HOME_DIR}/.dk/sdv-runtime/vss.json" ]; then
+                    show_info "Creating hackathon VSS from existing main VSS file..."
+                    cp "${HOME_DIR}/.dk/sdv-runtime/vss.json" "${HOME_DIR}/.dk/sdv-runtime/vss-hackathon.json"
+                    show_success "Hackathon VSS file created from main VSS"
+                else
+                    show_info "No main VSS found, using default setup for hackathon..."
+                    # Run setup script and then copy to hackathon
+                    scripts/setup_default_vss.sh
+                    cp "${HOME_DIR}/.dk/sdv-runtime/vss.json" "${HOME_DIR}/.dk/sdv-runtime/vss-hackathon.json"
+                    show_success "Default VSS setup completed and copied to hackathon"
+                fi
+            else
+                show_success "Hackathon VSS configuration already exists"
+            fi
+        else
+            show_info "Checking existing hackathon VSS configuration..."
+            if [ -f "${HOME_DIR}/.dk/sdv-runtime/vss-hackathon.json" ]; then
+                show_success "Hackathon VSS configuration already exists, skipping setup"
+            else
+                show_info "No existing hackathon VSS configuration found, creating from main VSS..."
+                if [ -f "${HOME_DIR}/.dk/sdv-runtime/vss.json" ]; then
+                    cp "${HOME_DIR}/.dk/sdv-runtime/vss.json" "${HOME_DIR}/.dk/sdv-runtime/vss-hackathon.json"
+                    show_success "Hackathon VSS created from main VSS file"
+                else
+                    show_warning "No main VSS found, setting up defaults for both..."
+                    scripts/setup_default_vss.sh
+                    cp "${HOME_DIR}/.dk/sdv-runtime/vss.json" "${HOME_DIR}/.dk/sdv-runtime/vss-hackathon.json"
+                    show_success "Default VSS setup completed for both main and hackathon"
+                fi
+            fi
+        fi
+
+        show_info "Deploying hackathon SDV Runtime..."
+
+        # Pull latest image for hackathon runtime
+        apply_manifest sdv-runtime-hackathon-pull.yaml
+        
+        show_info "Waiting for hackathon SDV Runtime image pull (timeout: ${pull_timeout}s)..."
+        run_with_feedback \
+            "sudo kubectl wait --for=condition=complete job/sdv-runtime-hackathon-pull --timeout=${pull_timeout}s" \
+            "Latest hackathon SDV Runtime image pulled successfully" \
+            "Hackathon SDV Runtime image pull failed" \
+            false \
+            true
+
+        # Clean up hackathon pull job
+        run_with_feedback \
+            "sudo kubectl delete job sdv-runtime-hackathon-pull --ignore-not-found" \
+            "Hackathon pull job cleaned up" \
+            "Hackathon cleanup completed"
+
+        # Apply hackathon runtime with force update
+        apply_manifest_with_force_update "sdv-runtime-hackathon.yaml" "sdv-runtime-hackathon" "${DOCKER_HUB_NAMESPACE}/sdv-runtime:latest"
+    else
+        if [[ "$update_mode" == "update" ]]; then
+            show_info "Hackathon SDV Runtime update skipped (hackathon=false)"
+        else
+            show_info "Hackathon SDV Runtime installation skipped (you can install later with './dk_install hackathon=true')"
+        fi
+    fi
 
     ###############################################################################
     # Step 11   DreamKit Manager
