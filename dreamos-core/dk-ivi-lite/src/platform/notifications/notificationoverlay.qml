@@ -23,8 +23,11 @@ Item {
     property int animationDuration: 400
     property int staggerDelay: 80
     
-    // SOLUTION 1: Store timers separately from the model
+    // FIXED: Enhanced timer management with proper synchronization
     property var activeTimers: ({}) // Object to store timers by notification ID
+    property var timerHandlers: ({}) // Store timer handler functions for proper cleanup
+    property int timerDebugEnabled: 0 // Debug flag for timer lifecycle tracking
+    property var notificationStatuses: ({}) // Track notification status to prevent duplicate operations
     
     // FIXED: Better initialization with retry mechanism
     Component.onCompleted: {
@@ -96,57 +99,200 @@ Item {
             // console.log("[NotificationOverlay] ERROR connecting signals:", error)
         }
     }
-    // SOLUTION 3: Enhanced auto-dismiss function that stores timers separately
+    // FIXED: Enhanced auto-dismiss function with proper synchronization
     function setupAutoDismissEnhanced(id, duration) {
-        if (duration <= 0) return
-        
-        // Clean up any existing timer for this ID
-        if (activeTimers[id]) {
-            activeTimers[id].destroy()
-            delete activeTimers[id]
+        if (duration <= 0) {
+            if (timerDebugEnabled) console.log("[NotificationOverlay] Skipping timer setup for", id, "- duration:", duration)
+            return
         }
         
+        // FIXED: Check if notification is already being processed
+        if (notificationStatuses[id] && notificationStatuses[id].dismissing) {
+            if (timerDebugEnabled) console.log("[NotificationOverlay] Notification", id, "already being dismissed, skipping timer setup")
+            return
+        }
+        
+        if (timerDebugEnabled) console.log("[NotificationOverlay] Setting up timer for", id, "duration:", duration)
+        
+        // Mark notification as having an active timer
+        notificationStatuses[id] = { hasTimer: true, dismissing: false }
+        
+        // Clean up any existing timer for this ID first
+        cleanupTimerForId(id)
+        
         // Add small random offset to prevent all timers firing simultaneously
-        var randomOffset = Math.floor(Math.random() * 200) // 0-199ms random offset
+        var randomOffset = Math.floor(Math.random() * 50) // Reduced to 0-49ms
         var adjustedDuration = duration + randomOffset
         
-        // console.log("[NotificationOverlay] Setting up auto-dismiss for", id, "in", adjustedDuration, "ms (original:", duration, ")")
+        try {
+            // Create timer using a more robust approach
+            var timerComponent = Qt.createComponent("Timer")
+            if (timerComponent.status === Component.Ready) {
+                var timer = timerComponent.createObject(notificationOverlay, {
+                    "interval": adjustedDuration,
+                    "repeat": false,
+                    "running": false // Start manually after setup
+                })
+                
+                if (timer) {
+                    // Set up timer properties and connections
+                    timer.notificationId = id
+                    
+                    // FIXED: Create dismissHandler with proper error handling and synchronization
+                    var dismissHandler = function() {
+                        if (timerDebugEnabled) console.log("[NotificationOverlay] Timer triggered for", id)
+                        
+                        // FIXED: Check if notification is already being dismissed
+                        if (notificationStatuses[id] && notificationStatuses[id].dismissing) {
+                            if (timerDebugEnabled) console.log("[NotificationOverlay] Notification", id, "already being dismissed by another process")
+                            return
+                        }
+                        
+                        // Mark as being dismissed to prevent race conditions
+                        if (!notificationStatuses[id]) notificationStatuses[id] = {}
+                        notificationStatuses[id].dismissing = true
+                        
+                        // Clean up timer reference immediately
+                        cleanupTimerForId(id)
+                        
+                        // FIXED: Use local dismissal to avoid manager desync
+                        handleNotificationDismissedInternal(id)
+                    }
+                    
+                    // Store handler reference for proper cleanup
+                    timerHandlers[id] = dismissHandler
+                    timer.triggered.connect(dismissHandler)
+                    
+                    // Store timer reference before starting
+                    activeTimers[id] = timer
+                    
+                    // Start the timer after everything is set up
+                    timer.running = true
+                    
+                    if (timerDebugEnabled) console.log("[NotificationOverlay] Timer created and started for", id, "duration:", adjustedDuration)
+                } else {
+                    console.warn("[NotificationOverlay] Failed to create timer for", id)
+                }
+            } else {
+                console.warn("[NotificationOverlay] Timer component not ready for", id)
+                // Fallback to old method
+                setupAutoDismissFallback(id, adjustedDuration)
+            }
+        } catch (error) {
+            console.warn("[NotificationOverlay] Error creating timer for", id, ":", error)
+            // Fallback to old method
+            setupAutoDismissFallback(id, adjustedDuration)
+        }
+    }
+    
+    // FIXED: Fallback timer creation method with improved synchronization
+    function setupAutoDismissFallback(id, duration) {
+        if (timerDebugEnabled) console.log("[NotificationOverlay] Using fallback timer method for", id)
         
-        var timer = Qt.createQmlObject('
+        var timer = Qt.createQmlObject(`
             import QtQuick
             Timer {
-                property string notificationId: ""
+                property string notificationId: "${id}"
                 running: true
                 repeat: false
+                interval: ${duration}
                 onTriggered: {
-                    // console.log("[NotificationOverlay] QML Timer auto-dismissing notification:", notificationId)
-                    if (notificationManagerInstance) {
-                        notificationManagerInstance.dismissNotification(notificationId)
-                    } else {
-                        // Fallback to local dismissal
-                        handleNotificationDismissed(notificationId)
+                    var timerId = notificationId
+                    if (notificationOverlay.timerDebugEnabled) {
+                        // console.log("[NotificationOverlay] Fallback timer triggered for", timerId)
                     }
-                    // Clean up timer reference
-                    if (activeTimers[notificationId]) {
-                        delete activeTimers[notificationId]
+                    
+                    // FIXED: Check for race conditions before dismissing
+                    if (notificationOverlay.notificationStatuses[timerId] && notificationOverlay.notificationStatuses[timerId].dismissing) {
+                        if (notificationOverlay.timerDebugEnabled) {
+                            // console.log("[NotificationOverlay] Notification", timerId, "already being dismissed, skipping fallback timer")
+                        }
+                        return
                     }
-                    destroy()
+                    
+                    // Mark as being dismissed
+                    if (!notificationOverlay.notificationStatuses[timerId]) {
+                        notificationOverlay.notificationStatuses[timerId] = {}
+                    }
+                    notificationOverlay.notificationStatuses[timerId].dismissing = true
+                    
+                    notificationOverlay.cleanupTimerForId(timerId)
+                    
+                    // FIXED: Use internal dismissal to avoid manager conflicts
+                    notificationOverlay.handleNotificationDismissedInternal(timerId)
                 }
             }
-        ', notificationOverlay)
+        `, notificationOverlay)
         
-        timer.interval = adjustedDuration
-        timer.notificationId = id
+        if (timer) {
+            activeTimers[id] = timer
+            if (timerDebugEnabled) console.log("[NotificationOverlay] Fallback timer created for", id)
+        } else {
+            console.error("[NotificationOverlay] Failed to create fallback timer for", id)
+        }
+    }
+    
+    // FIXED: Enhanced timer cleanup function with proper signal disconnection
+    function cleanupTimerForId(id) {
+        if (activeTimers[id]) {
+            if (timerDebugEnabled) console.log("[NotificationOverlay] Cleaning up timer for", id)
+            
+            try {
+                var timer = activeTimers[id]
+                timer.running = false
+                
+                // FIXED: Improved signal disconnection using stored handler reference
+                try {
+                    if (timerHandlers[id] && timer.triggered) {
+                        timer.triggered.disconnect(timerHandlers[id])
+                        delete timerHandlers[id]
+                        if (timerDebugEnabled) console.log("[NotificationOverlay] Successfully disconnected handler for", id)
+                    }
+                } catch (disconnectError) {
+                    // This is expected for some timers, so reduce log noise
+                    if (timerDebugEnabled) console.log("[NotificationOverlay] Handler already disconnected for", id)
+                }
+                
+                // Remove from activeTimers immediately
+                delete activeTimers[id]
+                
+                // Schedule destruction with delay to avoid races
+                Qt.callLater(function() {
+                    try {
+                        if (timer && timer.destroy && typeof timer.destroy === 'function') {
+                            timer.destroy()
+                        }
+                    } catch (destroyError) {
+                        if (timerDebugEnabled) console.log("[NotificationOverlay] Timer destruction completed for", id)
+                    }
+                }, 50)
+                
+            } catch (error) {
+                console.warn("[NotificationOverlay] Error cleaning up timer for", id, ":", error)
+                // Force cleanup
+                delete activeTimers[id]
+                delete timerHandlers[id]
+            }
+        }
         
-        // Store timer reference separately from model
-        activeTimers[id] = timer
+        // Clean up status tracking
+        if (notificationStatuses[id]) {
+            delete notificationStatuses[id]
+        }
     }
 
-    // FIXED: Enhanced notification handling with better error management
+    // FIXED: Enhanced notification handling with proper status tracking
     function handleNotificationAdded(id, title, message, level, duration, category, progress, actionText, actionId) {
-        console.log("[NotificationOverlay] *** handleNotificationAdded called ***")
+        // console.log("[NotificationOverlay] *** handleNotificationAdded called ***")
         console.log("[NotificationOverlay] Title:", title)
         console.log("[NotificationOverlay] Message:", message)
+        
+        // FIXED: Initialize notification status tracking
+        notificationStatuses[id] = { 
+            hasTimer: duration > 0, 
+            dismissing: false,
+            addedToModel: false
+        }
         
         var notification = {
             id: id,
@@ -160,11 +306,11 @@ Item {
             actionId: actionId || "",
             timestamp: new Date(),
             visible: false
-            // REMOVED: dismissTimer - don't store Timer objects in ListModel
         }
         
         try {
             notificationModel.append(notification)
+            notificationStatuses[id].addedToModel = true
             // console.log("[NotificationOverlay] Model count after append:", notificationModel.count)
             
             // Animate in with stagger
@@ -182,42 +328,71 @@ Item {
             
             // Limit visible notifications
             while (notificationModel.count > maxVisibleNotifications) {
-                // console.log("[NotificationOverlay] Removing excess notification")
+                if (timerDebugEnabled) console.log("[NotificationOverlay] Removing excess notification")
                 var removedNotification = notificationModel.get(0)
-                if (removedNotification && activeTimers[removedNotification.id]) {
-                    // Clean up timer for removed notification
-                    activeTimers[removedNotification.id].destroy()
-                    delete activeTimers[removedNotification.id]
+                if (removedNotification) {
+                    // Clean up timer for removed notification using improved method
+                    cleanupTimerForId(removedNotification.id)
                 }
                 notificationModel.remove(0, 1)
             }
             
         } catch (error) {
-            console.log("[NotificationOverlay] ERROR in handleNotificationAdded:", error)
+            // console.log("[NotificationOverlay] ERROR in handleNotificationAdded:", error)
+            // Clean up status on error
+            delete notificationStatuses[id]
         }
     }
     
-    // FIXED: Enhanced dismiss handling
-    function handleNotificationDismissed(id) {
-        // console.log("[NotificationOverlay] Handling dismissal for ID:", id)
+    // FIXED: Internal dismissal function that handles UI cleanup without circular calls
+    function handleNotificationDismissedInternal(id) {
+        if (timerDebugEnabled) console.log("[NotificationOverlay] Internal dismissal for ID:", id)
         
-        // Clean up timer first
-        if (activeTimers[id]) {
-            activeTimers[id].destroy()
-            delete activeTimers[id]
-            // console.log("[NotificationOverlay] Cleaned up timer for notification:", id)
-        }
+        // Clean up timer and status
+        cleanupTimerForId(id)
         
         // Find and remove notification from model
         for (var i = 0; i < notificationModel.count; i++) {
             var notification = notificationModel.get(i)
             if (notification.id === id) {
-                // console.log("[NotificationOverlay] Found notification to dismiss at index:", i)
+                if (timerDebugEnabled) console.log("[NotificationOverlay] Found notification to dismiss at index:", i)
                 animateNotificationOut(i)
+                
+                // CRITICAL FIX: After removing from UI, sync the manager's count without circular calls
+                // This must be done AFTER UI removal to prevent circular calls
+                Qt.callLater(function() {
+                    if (notificationManagerInstance) {
+                        try {
+                            if (timerDebugEnabled) console.log("[NotificationOverlay] Syncing C++ manager for dismissed notification:", id)
+                            // Use sync method to avoid signal emission and circular calls
+                            notificationManagerInstance.syncDismissedNotification(id)
+                        } catch (error) {
+                            // console.log("[NotificationOverlay] Error syncing manager:", error)
+                        }
+                    }
+                }, 0)
                 return
             }
         }
-        // console.log("[NotificationOverlay] Warning: Notification", id, "not found for dismissal")
+        if (timerDebugEnabled) console.log("[NotificationOverlay] Notification", id, "not found in model (may have been already removed)")
+    }
+    
+    // FIXED: External dismissal function for manager-triggered dismissals
+    function handleNotificationDismissed(id) {
+        if (timerDebugEnabled) console.log("[NotificationOverlay] External dismissal for ID:", id)
+        
+        // FIXED: Check if we're already processing this dismissal
+        if (notificationStatuses[id] && notificationStatuses[id].dismissing) {
+            if (timerDebugEnabled) console.log("[NotificationOverlay] Dismissal already in progress for", id)
+            return
+        }
+        
+        // Mark as being dismissed
+        if (!notificationStatuses[id]) notificationStatuses[id] = {}
+        notificationStatuses[id].dismissing = true
+        
+        // Use internal dismissal logic
+        handleNotificationDismissedInternal(id)
     }
     
     function handleNotificationUpdated(id, message, progress) {
@@ -234,15 +409,18 @@ Item {
     }
     
     function handleAllDismissed() {
-        // console.log("[NotificationOverlay] Handling dismiss all notifications")
+        if (timerDebugEnabled) console.log("[NotificationOverlay] Handling dismiss all notifications")
         
-        // Clean up all timers
-        for (var timerId in activeTimers) {
-            if (activeTimers[timerId]) {
-                activeTimers[timerId].destroy()
-            }
+        // Clean up all timers using the improved cleanup method
+        var timerIds = Object.keys(activeTimers)
+        for (var i = 0; i < timerIds.length; i++) {
+            cleanupTimerForId(timerIds[i])
         }
+        
+        // FIXED: Clear all tracking objects
         activeTimers = {}
+        timerHandlers = {}
+        notificationStatuses = {}
         
         // Animate all out with stagger
         for (var i = 0; i < notificationModel.count; i++) {
@@ -258,13 +436,10 @@ Item {
     
     // FIXED: Enhanced notification extension handling
     function handleNotificationExtended(id, additionalMs) {
-        // console.log("[NotificationOverlay] Extending notification:", id, "by", additionalMs, "ms")
+        if (timerDebugEnabled) console.log("[NotificationOverlay] Extending notification:", id, "by", additionalMs, "ms")
         
-        // Cancel existing timer
-        if (activeTimers[id]) {
-            activeTimers[id].destroy()
-            delete activeTimers[id]
-        }
+        // Clean up existing timer using improved method
+        cleanupTimerForId(id)
         
         // Create new extended timer
         setupAutoDismissEnhanced(id, additionalMs)
@@ -853,53 +1028,138 @@ Item {
                         }
                     }
                     
-                    // FIXED: Close button that works for ALL notification types including errors
+                    // ENHANCED: Close button with improved debugging and event handling
                     Rectangle {
+                        id: closeButton
                         width: 24
                         height: 24
                         radius: 12
-                        color: closeArea.containsMouse ? "#FF4444" : "#2A2A2A"
+                        color: closeArea.containsMouse ? (closeArea.pressed ? "#FF6666" : "#FF4444") : "#2A2A2A"
                         border.color: closeArea.containsMouse ? "#FF4444" : "#404040"
                         border.width: 1
                         Layout.alignment: Qt.AlignTop
+                        z: 1000 // Much higher z-index to ensure it's always on top
                         
                         Behavior on color { ColorAnimation { duration: 200 } }
                         Behavior on border.color { ColorAnimation { duration: 200 } }
+                        Behavior on scale { NumberAnimation { duration: 100 } }
+                        
+                        // Enhanced background highlight to make button more visible
+                        // Rectangle {
+                        //     anchors.centerIn: parent
+                        //     width: parent.width + 6
+                        //     height: parent.height + 6
+                        //     radius: (parent.width + 6) / 2
+                        //     color: closeArea.containsMouse ? "#FF4444" : "#000000"
+                        //     opacity: closeArea.containsMouse ? 0.2 : 0.15
+                        //     z: -1
+                            
+                        //     // Pulsing animation when hovered
+                        //     SequentialAnimation on opacity {
+                        //         running: closeArea.containsMouse
+                        //         loops: Animation.Infinite
+                        //         NumberAnimation { to: 0.3; duration: 600 }
+                        //         NumberAnimation { to: 0.1; duration: 600 }
+                        //     }
+                        // }
                         
                         Text {
+                            id: closeText
                             anchors.centerIn: parent
-                            text: "×"
-                            color: closeArea.containsMouse ? "#FFFFFF" : "#B0B0B0"
+                            text: "✕" // Using a more visible close symbol
+                            color: closeArea.containsMouse ? "#FFFFFF" : "#E0E0E0"
                             font.pixelSize: 14
                             font.weight: Font.Bold
                             font.family: "Segoe UI"
+                            scale: closeArea.containsMouse ? (closeArea.pressed ? 0.8 : 1.1) : 1.0
                             
                             Behavior on color { ColorAnimation { duration: 200 } }
+                            Behavior on scale { NumberAnimation { duration: 150; easing.type: Easing.OutBack } }
                         }
                         
                         MouseArea {
                             id: closeArea
                             anchors.fill: parent
+                            anchors.margins: -4 // Reasonable clickable area expansion
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
+                            z: 2000 // Highest z-index to ensure priority
+                            acceptedButtons: Qt.LeftButton
+                            propagateComposedEvents: false // Don't propagate to parent MouseAreas
+                            enabled: true // Explicitly enable to ensure it captures events
+                            preventStealing: true // Prevent parent MouseAreas from stealing events
+                            
+                            // Enhanced debug visualization - enabled by default for testing
+                            Rectangle {
+                                anchors.fill: parent
+                                color: "red"
+                                opacity: 0.2
+                                border.color: "yellow"
+                                border.width: 1
+                                visible: notificationOverlay.timerDebugEnabled === 1
+                            }
                             
                             onClicked: {
-                                // console.log("[NotificationOverlay] Close button clicked for notification:", model.id)
+                                // console.log("[NotificationOverlay] === CLOSE BUTTON CLICKED ===")
+                                // console.log("[NotificationOverlay] Notification ID:", model.id)
+                                // console.log("[NotificationOverlay] Mouse position:", mouse.x, mouse.y)
                                 
-                                // Clean up timer using the activeTimers object
-                                if (notificationOverlay.activeTimers[model.id]) {
-                                    notificationOverlay.activeTimers[model.id].destroy()
-                                    delete notificationOverlay.activeTimers[model.id]
+                                mouse.accepted = true // Explicitly accept the event
+                                
+                                // FIXED: Check if already being dismissed to prevent duplicate actions
+                                if (notificationOverlay.notificationStatuses[model.id] && notificationOverlay.notificationStatuses[model.id].dismissing) {
+                                    // console.log("[NotificationOverlay] Notification", model.id, "already being dismissed")
+                                    return
                                 }
                                 
-                                // Always allow manual dismissal
-                                if (notificationManagerInstance) {
-                                    // console.log("[NotificationOverlay] Calling dismissNotification via manager")
-                                    notificationManagerInstance.dismissNotification(model.id)
-                                } else {
-                                    // console.log("[NotificationOverlay] Fallback to local dismiss")
-                                    handleNotificationDismissed(model.id)
+                                // Mark as being dismissed to prevent race conditions
+                                if (!notificationOverlay.notificationStatuses[model.id]) {
+                                    notificationOverlay.notificationStatuses[model.id] = {}
                                 }
+                                notificationOverlay.notificationStatuses[model.id].dismissing = true
+                                
+                                // Clean up timer
+                                notificationOverlay.cleanupTimerForId(model.id)
+                                
+                                // FIXED: Use internal dismissal for immediate UI response, then notify manager
+                                // console.log("[NotificationOverlay] Using direct dismissal for immediate response")
+                                notificationOverlay.handleNotificationDismissedInternal(model.id)
+                                
+                                // Notify manager asynchronously to keep it in sync
+                                Qt.callLater(function() {
+                                    if (notificationManagerInstance) {
+                                        try {
+                                            notificationManagerInstance.dismissNotification(model.id)
+                                        } catch (error) {
+                                            // Manager may have already dismissed it, that's fine
+                                            // console.log("[NotificationOverlay] Manager dismissal completed or already done for", model.id)
+                                        }
+                                    }
+                                }, 0)
+                            }
+                            
+                            onPressed: {
+                                // console.log("[NotificationOverlay] Close button pressed")
+                                closeButton.scale = 0.9
+                                mouse.accepted = true
+                            }
+                            
+                            onReleased: {
+                                // console.log("[NotificationOverlay] Close button released")
+                                closeButton.scale = 1.0
+                            }
+                            
+                            onCanceled: {
+                                // console.log("[NotificationOverlay] Close button canceled")
+                                closeButton.scale = 1.0
+                            }
+                            
+                            onEntered: {
+                                // console.log("[NotificationOverlay] Close button mouse entered")
+                            }
+                            
+                            onExited: {
+                                // console.log("[NotificationOverlay] Close button mouse exited")
                             }
                         }
                     }
@@ -907,27 +1167,87 @@ Item {
                 
                 // Click handler for entire notification
                 MouseArea {
+                    id: notificationClickArea
                     anchors.fill: parent
                     acceptedButtons: Qt.LeftButton
-                    onClicked: {
-                        if (notificationManagerInstance) {
-                            notificationManagerInstance.handleNotificationClick(model.id)
+                    z: 1 // Much lower z-index than close button
+                    propagateComposedEvents: false // Don't propagate to avoid conflicts
+                    
+                    onClicked: function(mouse) {
+                        // console.log("[NotificationOverlay] Notification body clicked at:", mouse.x, mouse.y)
+                        
+                        // Calculate close button area (32x32 button with LayoutAlignment and margins)
+                        var closeButtonArea = {
+                            x: parent.width - 44, // Account for button width + margins
+                            y: 0,
+                            width: 44,
+                            height: 44
+                        }
+                        
+                        var clickInCloseArea = (mouse.x >= closeButtonArea.x && mouse.x <= (closeButtonArea.x + closeButtonArea.width) &&
+                                              mouse.y >= closeButtonArea.y && mouse.y <= (closeButtonArea.y + closeButtonArea.height))
+                        
+                        // console.log("[NotificationOverlay] Click at:", mouse.x, mouse.y, "Close area:", closeButtonArea.x, closeButtonArea.y, closeButtonArea.width, closeButtonArea.height, "In close area:", clickInCloseArea)
+                        
+                        if (clickInCloseArea) {
+                            // FIXED: Handle close button click with proper synchronization
+                            // console.log("[NotificationOverlay] Close button clicked via notification area - handling dismissal")
+                            
+                            // Check if already being dismissed
+                            if (notificationOverlay.notificationStatuses[model.id] && notificationOverlay.notificationStatuses[model.id].dismissing) {
+                                // console.log("[NotificationOverlay] Notification", model.id, "already being dismissed")
+                                return
+                            }
+                            
+                            // Mark as being dismissed
+                            if (!notificationOverlay.notificationStatuses[model.id]) {
+                                notificationOverlay.notificationStatuses[model.id] = {}
+                            }
+                            notificationOverlay.notificationStatuses[model.id].dismissing = true
+                            
+                            // Clean up timer
+                            notificationOverlay.cleanupTimerForId(model.id)
+                            
+                            // Use direct dismissal for immediate response
+                            // console.log("[NotificationOverlay] Using direct dismissal for immediate response")
+                            notificationOverlay.handleNotificationDismissedInternal(model.id)
+                            
+                            // Notify manager asynchronously
+                            Qt.callLater(function() {
+                                if (notificationManagerInstance) {
+                                    try {
+                                        notificationManagerInstance.dismissNotification(model.id)
+                                    } catch (error) {
+                                        // console.log("[NotificationOverlay] Manager dismissal completed for", model.id)
+                                    }
+                                }
+                            }, 0)
+                        } else {
+                            // console.log("[NotificationOverlay] Handling notification body click for ID:", model.id)
+                            if (notificationManagerInstance) {
+                                notificationManagerInstance.handleNotificationClick(model.id)
+                            }
                         }
                     }
                 }
                 
                 // Hover effects
                 MouseArea {
+                    id: hoverArea
                     anchors.fill: parent
                     hoverEnabled: true
                     acceptedButtons: Qt.NoButton
+                    z: 0 // Lowest z-index
+                    propagateComposedEvents: false // Don't propagate - this is just for hover
                     
                     onEntered: {
+                        // console.log("[NotificationOverlay] Notification hover entered")
                         notificationCard.scale = 1.02
                         glassEffect.opacity = 0.08
                     }
                     
                     onExited: {
+                        // console.log("[NotificationOverlay] Notification hover exited")
                         notificationCard.scale = 1.0
                         glassEffect.opacity = 0.05
                     }
@@ -1087,7 +1407,46 @@ Item {
         }
     }
     
-    // FIXED: Enhanced shortcuts for testing
+    // FIXED: Enhanced test function to validate auto-dismiss timer fixes
+    function testAutoDismissFix() {
+        if (!notificationManagerInstance) return
+        
+        // console.log("[NotificationOverlay] Testing auto-dismiss timer fixes...")
+        timerDebugEnabled = 1
+        
+        // Test rapid notifications that should all auto-dismiss
+        notificationManagerInstance.info("Auto-Dismiss Test 1", "This should auto-dismiss in ~5 seconds")
+        Qt.callLater(function() {
+            notificationManagerInstance.success("Auto-Dismiss Test 2", "This should auto-dismiss in ~4 seconds")
+        }, 200)
+        Qt.callLater(function() {
+            notificationManagerInstance.warning("Auto-Dismiss Test 3", "This should auto-dismiss in ~6 seconds")
+        }, 400)
+        Qt.callLater(function() {
+            notificationManagerInstance.error("Manual Dismiss Test", "This ERROR should stay until manually dismissed (duration=0)")
+        }, 600)
+        
+        // Show timer status after creation
+        Qt.callLater(function() {
+            var timerCount = Object.keys(activeTimers).length
+            // console.log("[NotificationOverlay] Created", timerCount, "active timers for auto-dismiss test")
+            // console.log("[NotificationOverlay] Timer IDs:", Object.keys(activeTimers))
+        }, 1000)
+        
+        // Check timer cleanup after some dismissals
+        Qt.callLater(function() {
+            var timerCount = Object.keys(activeTimers).length
+            var pendingCount = pendingTimerCleanup.length
+            // console.log("[NotificationOverlay] After 8 seconds - Active timers:", timerCount, "Pending cleanup:", pendingCount)
+            if (timerCount === 1) {
+                // console.log("[NotificationOverlay] SUCCESS: Only error notification should remain (has no auto-dismiss timer)")
+            } else {
+                // console.log("[NotificationOverlay] WARNING: Unexpected timer count. Expected 1, got", timerCount)
+            }
+        }, 8000)
+    }
+    
+    // FIXED: Enhanced shortcuts for testing and debugging
     Shortcut {
         sequence: "Ctrl+Shift+N"
         onActivated: testNotifications()
@@ -1110,5 +1469,89 @@ Item {
                 notificationManagerInstance.dismissAll()
             }
         }
+    }
+    
+    // Debug shortcut to toggle timer debugging
+    Shortcut {
+        sequence: "Ctrl+Shift+D"
+        onActivated: {
+            timerDebugEnabled = timerDebugEnabled ? 0 : 1
+            // console.log("[NotificationOverlay] Timer debugging", timerDebugEnabled ? "enabled" : "disabled")
+        }
+    }
+    
+    // Debug shortcut to show timer status
+    Shortcut {
+        sequence: "Ctrl+Shift+S"
+        onActivated: {
+            var timerCount = Object.keys(activeTimers).length
+            var pendingCount = pendingTimerCleanup.length
+            // console.log("[NotificationOverlay] Active timers:", timerCount, "Pending cleanup:", pendingCount)
+            // console.log("[NotificationOverlay] Active timer IDs:", Object.keys(activeTimers))
+        }
+    }
+    
+    // Test shortcut for auto-dismiss fix validation
+    Shortcut {
+        sequence: "Ctrl+Shift+T"
+        onActivated: testAutoDismissFix()
+    }
+    
+    // FIXED: Test shortcut for consecutive NOTIFY_WARNING functionality
+    Shortcut {
+        sequence: "Ctrl+Shift+X"
+        onActivated: testCloseButton()
+    }
+    
+    // FIXED: Test function for close button functionality with consecutive NOTIFY_WARNING calls
+    function testCloseButton() {
+        if (!notificationManagerInstance) {
+            // console.log("[NotificationOverlay] Cannot test - no notification manager instance")
+            return
+        }
+        
+        // console.log("[NotificationOverlay] === TESTING CONSECUTIVE NOTIFY_WARNING FUNCTIONALITY ===")
+        // console.log("[NotificationOverlay] Timer debugging enabled: Watch for synchronization issues")
+        timerDebugEnabled = 1
+        
+        // FIXED: Test the exact scenario mentioned in the issue
+        // console.log("[NotificationOverlay] Creating consecutive NOTIFY_WARNING calls as reported in the issue...")
+        
+        notificationManagerInstance.warning("ZonalECU", "VIP (Vehicle Integration Platform) ~ OFFLINE")
+        notificationManagerInstance.warning("ZonalECU", "VIP (Vehicle Integration Platform) ~ OFFLINE 1")
+        notificationManagerInstance.warning("ZonalECU", "VIP (Vehicle Integration Platform) ~ OFFLINE 2")
+        notificationManagerInstance.warning("ZonalECU", "VIP (Vehicle Integration Platform) ~ OFFLINE 3")
+        notificationManagerInstance.warning("ZonalECU", "VIP (Vehicle Integration Platform) ~ OFFLINE 4")
+        
+        // console.log("[NotificationOverlay] ============================================")
+        // console.log("[NotificationOverlay] INSTRUCTIONS FOR TESTING:")
+        // console.log("[NotificationOverlay] 1. Watch for 5 consecutive warning notifications")
+        // console.log("[NotificationOverlay] 2. All notifications should appear and auto-dismiss properly")
+        // console.log("[NotificationOverlay] 3. Try clicking close buttons - they should work without errors")
+        // console.log("[NotificationOverlay] 4. No 'not found for dismissal' warnings should appear")
+        // console.log("[NotificationOverlay] 5. Check active timer count in console output")
+        // console.log("[NotificationOverlay] ============================================")
+        
+        // Show timer status after creation
+        Qt.callLater(function() {
+            var timerCount = Object.keys(activeTimers).length
+            var statusCount = Object.keys(notificationStatuses).length
+            // console.log("[NotificationOverlay] Created", timerCount, "active timers")
+            // console.log("[NotificationOverlay] Tracking", statusCount, "notification statuses")
+            // console.log("[NotificationOverlay] Timer IDs:", Object.keys(activeTimers))
+        }, 1000)
+        
+        // Check timer cleanup after some dismissals
+        Qt.callLater(function() {
+            var timerCount = Object.keys(activeTimers).length
+            var statusCount = Object.keys(notificationStatuses).length
+            // console.log("[NotificationOverlay] After 10 seconds - Active timers:", timerCount, "Statuses:", statusCount)
+            if (timerCount === 0 && statusCount === 0) {
+                // console.log("[NotificationOverlay] SUCCESS: All timers and statuses cleaned up properly")
+            } else {
+                // console.log("[NotificationOverlay] Remaining timer IDs:", Object.keys(activeTimers))
+                // console.log("[NotificationOverlay] Remaining status IDs:", Object.keys(notificationStatuses))
+            }
+        }, 10000)
     }
 }

@@ -255,9 +255,6 @@ QStringList InstallationWorker::buildInstallationCommands(const AppInfo &app, co
                 echo "Mirror job failed immediately"
                 kubectl logs job/mirror-%1 --tail=5
                 exit 1
-            elif kubectl get pods -l job-name=mirror-%1 -o jsonpath='{.items[0].status.phase}' | grep -q Pending; then
-                echo "Mirror pod stuck in Pending state"
-                exit 1
             elif kubectl get pods -l job-name=mirror-%1 -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' | grep -qE "ImagePullBackOff|ErrImagePull"; then
                 echo "Mirror job image pull failed"
                 exit 1
@@ -279,9 +276,6 @@ QStringList InstallationWorker::buildInstallationCommands(const AppInfo &app, co
             if kubectl get job pull-%1 -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' | grep -q True; then
                 echo "Pull job failed immediately"
                 kubectl logs job/pull-%1 --tail=5
-                exit 1
-            elif kubectl get pods -l job-name=pull-%1 -o jsonpath='{.items[0].status.phase}' | grep -q Pending; then
-                echo "Pull pod stuck in Pending - check node resources"
                 exit 1
             elif kubectl get pods -l job-name=pull-%1 -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' | grep -qE "ImagePullBackOff|ErrImagePull"; then
                 echo "Pull job image pull failed - check registry access"

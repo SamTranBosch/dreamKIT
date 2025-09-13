@@ -87,6 +87,9 @@ public:
     Q_INVOKABLE void dismissAll();
     Q_INVOKABLE void dismissCategory(const QString &category);
     
+    // Internal synchronization method for QML auto-dismissals (no signal emission)
+    Q_INVOKABLE void syncDismissedNotification(const QString &id);
+    
     // Convenience methods for different levels
     Q_INVOKABLE QString info(const QString &title, const QString &message, const QString &category = "info");
     Q_INVOKABLE QString success(const QString &title, const QString &message, const QString &category = "success");
@@ -200,7 +203,7 @@ private:
     QTimer *m_queueTimer;
     QTimer *m_cleanupTimer;
     
-    int m_maxVisible = 5;
+    int m_maxVisible = 10;
     int m_maxHistory = 200;
     bool m_globalMute = false;
     int m_totalCount = 0;
@@ -266,6 +269,16 @@ private:
 // Smart notifications that update instead of creating duplicates
 #define SMART_NOTIFY(category, title, msg, level) \
     NotificationManager::instance().categoryNotify(category, title, msg, level, true)
+
+// Enhanced macros for consecutive notifications (guaranteed to show each one)
+#define NOTIFY_INFO_ALWAYS(title, message) \
+    NotificationManager::instance().showNotification(title, message, 0, 5000, QString("info_%1").arg(QDateTime::currentMSecsSinceEpoch() % 100000))
+
+#define NOTIFY_SUCCESS_ALWAYS(title, message) \
+    NotificationManager::instance().showNotification(title, message, 1, 4000, QString("success_%1").arg(QDateTime::currentMSecsSinceEpoch() % 100000))
+
+#define NOTIFY_WARNING_ALWAYS(title, message) \
+    NotificationManager::instance().showNotification(title, message, 2, 6000, QString("warning_%1").arg(QDateTime::currentMSecsSinceEpoch() % 100000))
 
 // Process tracking
 #define START_PROCESS(name, desc) \
